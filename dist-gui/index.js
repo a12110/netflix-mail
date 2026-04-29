@@ -2099,7 +2099,8 @@ var Hono2 = class extends Hono {
 // src/constants.ts
 var SESSION_COOKIE = "nm_session";
 var SESSION_TTL_SECONDS = 12 * 60 * 60;
-var PASSWORD_ITERATIONS = 12e4;
+var PASSWORD_MAX_ITERATIONS = 1e5;
+var PASSWORD_ITERATIONS = PASSWORD_MAX_ITERATIONS;
 var PASSWORD_ALGORITHM = "pbkdf2-sha256";
 var DEFAULT_WINDOW_MINUTES = 30;
 var DEFAULT_MAX_EMAIL_BODY_BYTES = 24e6;
@@ -2228,7 +2229,7 @@ __name(hashPassword, "hashPassword");
 async function verifyPassword(password, stored) {
   const [algorithm, iterationsText, saltText, expected] = stored.split("$");
   const iterations = Number(iterationsText);
-  if (algorithm !== PASSWORD_ALGORITHM || !Number.isFinite(iterations) || !saltText || !expected) {
+  if (algorithm !== PASSWORD_ALGORITHM || !Number.isInteger(iterations) || iterations <= 0 || iterations > PASSWORD_MAX_ITERATIONS || !saltText || !expected) {
     return false;
   }
   const actual = await derivePassword(password, base64UrlToBytes(saltText), iterations);

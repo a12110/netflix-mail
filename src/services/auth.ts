@@ -1,4 +1,10 @@
-import { PASSWORD_ALGORITHM, PASSWORD_ITERATIONS, SESSION_COOKIE, SESSION_TTL_SECONDS } from "../constants";
+import {
+  PASSWORD_ALGORITHM,
+  PASSWORD_ITERATIONS,
+  PASSWORD_MAX_ITERATIONS,
+  SESSION_COOKIE,
+  SESSION_TTL_SECONDS
+} from "../constants";
 import type { AdminRow, Env, SessionPayload } from "../types";
 import {
   base64UrlDecodeText,
@@ -34,7 +40,14 @@ export async function hashPassword(password: string): Promise<string> {
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [algorithm, iterationsText, saltText, expected] = stored.split("$");
   const iterations = Number(iterationsText);
-  if (algorithm !== PASSWORD_ALGORITHM || !Number.isFinite(iterations) || !saltText || !expected) {
+  if (
+    algorithm !== PASSWORD_ALGORITHM ||
+    !Number.isInteger(iterations) ||
+    iterations <= 0 ||
+    iterations > PASSWORD_MAX_ITERATIONS ||
+    !saltText ||
+    !expected
+  ) {
     return false;
   }
   const actual = await derivePassword(password, base64UrlToBytes(saltText), iterations);

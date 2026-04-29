@@ -1,6 +1,7 @@
 export const SESSION_COOKIE = "nm_session";
 export const SESSION_TTL_SECONDS = 12 * 60 * 60;
-export const PASSWORD_ITERATIONS = 120_000;
+export const PASSWORD_MAX_ITERATIONS = 100_000;
+export const PASSWORD_ITERATIONS = PASSWORD_MAX_ITERATIONS;
 export const PASSWORD_ALGORITHM = "pbkdf2-sha256";
 export const DEFAULT_WINDOW_MINUTES = 30;
 export const DEFAULT_MAX_EMAIL_BODY_BYTES = 24_000_000;
