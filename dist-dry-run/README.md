@@ -1,0 +1,1 @@
+This folder contains the built output assets for the worker "netflix-mail" generated at 2026-04-28T14:53:09.963Z.

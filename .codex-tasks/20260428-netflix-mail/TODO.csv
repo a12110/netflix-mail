@@ -1,0 +1,11 @@
+id,task,status,acceptance_criteria,validation_command,completed_at,retry_count,notes
+1,Create project scaffold,DONE,Package Wrangler TypeScript and migration files exist,test -f package.json && test -f wrangler.jsonc && test -f migrations/0001_initial.sql,2026-04-28T17:20:00+08:00,0,
+2,Implement core services,DONE,Email parsing auth rules content and share link services compile,yarn tsc --noEmit,2026-04-28T17:40:00+08:00,0,
+3,Implement routes and pages,DONE,Admin and visitor routes are wired in Worker,yarn tsc --noEmit,2026-04-28T17:40:00+08:00,0,
+4,Add tests and docs,DONE,Tests and README cover planned behavior,yarn test,2026-04-28T17:41:00+08:00,0,
+5,Run final validation,DONE,Typecheck and tests pass,yarn run check,2026-04-28T17:45:00+08:00,1,Yarn v1 `yarn check` is a registry check command; use `yarn run check` for the script.
+6,Maximize saved oversized body,DONE,Headers use a separate small cap and text/html body saves up to configured body cap before truncation,yarn run check,2026-04-28T17:51:00+08:00,0,
+7,Add Cloudflare Workers GUI deploy docs,DONE,README links to a GUI deploy guide and guide covers D1 binding migrations secrets Email Routing and verification,test -f docs/cloudflare-workers-gui-deploy.md && grep -q "Cloudflare Workers 网页 GUI 部署教程" README.md,2026-04-29T11:15:00+08:00,0,
+8,Run documentation validation,DONE,Markdown references are present and project checks still pass,yarn run check,2026-04-29T11:16:00+08:00,0,Yarn cache warnings only; typecheck and 13 tests passed.
+9,Add packaged-code GUI upload path,DONE,Documentation explains Dashboard Edit Code paste-upload flow using dist-gui/index.js and D1/Email bindings,grep -q "上传打包后的代码" docs/cloudflare-workers-gui-deploy.md,2026-04-29T11:21:00+08:00,0,
+10,Validate packaged GUI artifact and docs,DONE,Package script and docs validate with check/build commands,yarn run check,2026-04-29T11:22:00+08:00,0,yarn build:gui passed with escalation due Wrangler log path; yarn run check passed with 13 tests.

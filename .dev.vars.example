@@ -1,0 +1,4 @@
+SESSION_SECRET="replace-with-a-long-random-string"
+ADMIN_SETUP_TOKEN="replace-with-a-setup-token"
+MAX_EMAIL_CONTENT_BYTES="24000000"
+MAX_EMAIL_HEADERS_BYTES="200000"

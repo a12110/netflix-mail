@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "netflix-mail",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-04-28",
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "APP_NAME": "Netflix Mail",
+    "MAX_EMAIL_CONTENT_BYTES": "24000000",
+    "MAX_EMAIL_HEADERS_BYTES": "200000"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "netflix_mail",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
