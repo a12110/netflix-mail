@@ -9,7 +9,7 @@ Cloudflare Workers + Email Routing + D1 的临时访问代码邮件系统。Work
 - 超大正文会按 `MAX_EMAIL_CONTENT_BYTES` 尽量保存，后续内容截断并标记；headers 使用单独的 `MAX_EMAIL_HEADERS_BYTES` 上限。
 - 附件二进制内容不保存；只保存附件文件名、类型、大小等元数据。
 - 管理员账号保存在 D1，密码使用 PBKDF2-SHA256 哈希。
-- 分享链接只保存 token hash，明文 token 仅创建时返回。
+- 分享链接保存 token hash，并保存可恢复 token 供管理员在后台重新复制访问链接；访客访问仍按 hash 校验。
 - 同一个 Worker 提供管理员后台和访客页面。
 
 ## 本地准备
@@ -47,6 +47,7 @@ yarn dev
 ```
 
 打开 `/setup` 创建第一个管理员，然后进入 `/admin`。前端页面采用内嵌 HTML/CSS/vanilla JS，无需单独构建前端资源。
+初始化接口会自动执行 Worker 内置的 D1 建表与迁移语句，无需先手动粘贴 SQL。
 
 ## 部署
 
@@ -77,6 +78,7 @@ yarn deploy
 - `/admin`：管理员后台邮件中心。
 - `/admin/rules`：规则管理页。
 - `/admin/share-links`：分享链接页。
+- `/admin/database`：数据库管理页，可查看并执行 Worker 内置迁移。
 - `/v/:token`：访客访问代码页，只展示最近 30 分钟内命中分享规则的邮件。
 
 界面风格为浅色企业后台，使用蓝色作为主操作色、绿色表示安全/成功状态；所有页面仍由同一个 Worker 输出。
@@ -93,6 +95,10 @@ yarn deploy
 - `code`
 
 分享链接创建时选择一个或多个规则。访客 API 每次请求都会计算 `now - 30 minutes` 到当前时刻的窗口，所以页面轮询时能看到新收到的匹配邮件，但不会继续展示超过 30 分钟的旧邮件。
+
+## 数据库升级
+
+Worker 最终 JS 内置数据库建表和升级语句。更新 Worker 后，管理员可以进入 `/admin/database` 查看迁移状态并点击“升级数据库”，将新增字段或索引写入 D1。
 
 ## 验证
 

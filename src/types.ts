@@ -70,6 +70,7 @@ export interface RuleRow {
 export interface ShareLinkRow {
   id: number;
   name: string | null;
+  token: string | null;
   token_hash: string;
   expires_at: string | null;
   status: "active" | "disabled";

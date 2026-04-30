@@ -14,6 +14,13 @@ export interface CreateShareLinkInput {
   adminId: number;
 }
 
+export interface UpdateShareLinkInput {
+  name?: string | null;
+  expiresAt?: string | null;
+  ruleIds?: number[];
+  status?: "active" | "disabled";
+}
+
 export async function hashShareToken(token: string): Promise<string> {
   return await sha256Base64Url(token);
 }
@@ -26,10 +33,10 @@ export async function createShareLink(db: D1Database, input: CreateShareLinkInpu
   const tokenHash = await hashShareToken(token);
   const result = await db
     .prepare(
-      `INSERT INTO share_links (name, token_hash, expires_at, status, window_minutes, created_by_admin_id)
-       VALUES (?1, ?2, ?3, 'active', ?4, ?5)`
+      `INSERT INTO share_links (name, token, token_hash, expires_at, status, window_minutes, created_by_admin_id)
+       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)`
     )
-    .bind(input.name ?? null, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId)
+    .bind(input.name ?? null, token, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId)
     .run();
   const id = Number(result.meta.last_row_id);
   await db.batch(
@@ -46,7 +53,26 @@ export async function listShareLinks(db: D1Database): Promise<ShareLinkWithRules
 }
 
 export async function setShareLinkStatus(db: D1Database, id: number, status: "active" | "disabled"): Promise<void> {
-  await db.prepare("UPDATE share_links SET status = ?1 WHERE id = ?2").bind(status, id).run();
+  await updateShareLink(db, id, { status });
+}
+
+export async function updateShareLink(db: D1Database, id: number, input: UpdateShareLinkInput): Promise<void> {
+  const updates: string[] = [];
+  const values: Array<string | number | null> = [];
+  addShareLinkUpdate(updates, values, "name", input.name);
+  addShareLinkUpdate(updates, values, "expires_at", input.expiresAt);
+  addShareLinkUpdate(updates, values, "status", input.status);
+  if (updates.length > 0) {
+    values.push(id);
+    await db.prepare(`UPDATE share_links SET ${updates.join(", ")} WHERE id = ?${values.length}`).bind(...values).run();
+  }
+  if (input.ruleIds) {
+    await replaceShareLinkRules(db, id, input.ruleIds);
+  }
+}
+
+export async function deleteShareLink(db: D1Database, id: number): Promise<void> {
+  await db.prepare("DELETE FROM share_links WHERE id = ?1").bind(id).run();
 }
 
 export async function getShareLinkByToken(db: D1Database, token: string): Promise<ShareLinkWithRules | null> {
@@ -69,4 +95,29 @@ async function withRuleIds(db: D1Database, row: ShareLinkRow): Promise<ShareLink
     .bind(row.id)
     .all<{ rule_id: number }>();
   return { ...row, ruleIds: rules.results.map((rule) => rule.rule_id) };
+}
+
+function addShareLinkUpdate(
+  updates: string[],
+  values: Array<string | number | null>,
+  column: string,
+  value: string | null | undefined
+): void {
+  if (value === undefined) {
+    return;
+  }
+  values.push(value);
+  updates.push(`${column} = ?${values.length}`);
+}
+
+async function replaceShareLinkRules(db: D1Database, id: number, ruleIds: number[]): Promise<void> {
+  await db.prepare("DELETE FROM share_link_rules WHERE share_link_id = ?1").bind(id).run();
+  if (ruleIds.length === 0) {
+    return;
+  }
+  await db.batch(
+    ruleIds.map((ruleId) =>
+      db.prepare("INSERT INTO share_link_rules (share_link_id, rule_id) VALUES (?1, ?2)").bind(id, ruleId)
+    )
+  );
 }

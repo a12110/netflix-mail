@@ -1,3 +1,5 @@
+import { MAIL_STYLES } from "./mail-styles";
+
 export function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -208,6 +210,11 @@ pre {
   background: var(--success-soft);
   border-color: #bbf7d0;
 }
+.code-label {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0;
+}
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .checkbox-pill {
   display: inline-flex;
@@ -226,6 +233,48 @@ pre {
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.14); }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .table-wrap table { min-width: 720px; }
+.modal-card {
+  width: min(680px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-md);
+}
+.modal-card::backdrop { background: rgba(15, 23, 42, 0.38); backdrop-filter: blur(4px); }
+.modal-form { padding: 22px; }
+.modal-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.list-item-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-sm);
+}
+.item-main { display: grid; gap: 12px; min-width: 0; }
+.item-title-row, .item-meta, .item-actions, .generated-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.item-title-row strong { font-size: 16px; }
+.item-actions { justify-content: flex-end; flex: 0 0 auto; }
+.item-actions button { min-height: 36px; padding: 7px 12px; }
+.generated-link {
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 13px 14px;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius-md);
+  background: var(--success-soft);
+  color: #166534;
+}
+.generated-link span { min-width: 0; overflow-wrap: anywhere; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .metric-card { gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 850; letter-spacing: -0.04em; margin-top: 4px; }
@@ -266,6 +315,7 @@ pre {
 .detail-row { display: grid; grid-template-columns: 110px 1fr; gap: 14px; padding: 8px 0; color: var(--muted-strong); }
 .hero-auth { min-height: 100vh; display: grid; grid-template-columns: minmax(280px, 420px) 520px; gap: 54px; align-items: center; width: min(1320px, calc(100vw - 48px)); margin: 0 auto; padding: 48px 0; background: transparent; border: 0; box-shadow: none; }
 .hero-copy { display: grid; gap: 28px; }
+.auth-loading { min-height: 100vh; display: grid; place-content: center; gap: 18px; text-align: center; }
 .compact-hero { align-content: center; gap: 22px; }
 .hero-copy p { font-size: 17px; color: var(--muted-strong); }
 .hero-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -284,9 +334,8 @@ pre {
 .visitor-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 28px; }
 .visitor-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 28px; margin-bottom: 22px; }
 .visitor-count { font-size: 28px; font-weight: 850; color: var(--primary); }
-.email-card { display: grid; grid-template-columns: 64px minmax(0, 1.2fr) minmax(240px, 1fr) 170px; gap: 18px; align-items: center; padding: 20px 24px; margin-bottom: 14px; }
-.email-body-preview { color: var(--muted-strong); }
-.empty-state { padding: 32px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+.mail-reader-page { width: min(1600px, calc(100vw - 32px)); }
+${MAIL_STYLES}
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; padding: 18px; }
@@ -296,19 +345,25 @@ pre {
   .hero-auth { grid-template-columns: 1fr; }
   .metric-grid, .hero-features { grid-template-columns: 1fr; }
   .email-card { grid-template-columns: 54px 1fr; }
+  .mail-viewer-grid { grid-template-columns: 1fr; }
+  .mail-list-panel { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 760px) {
   main, .dashboard-main, .visitor-shell { width: min(100vw - 24px, 100%); margin-top: 16px; }
   section { padding: 16px; }
-  .grid, .search-panel, .visitor-hero { display: block; }
+  .grid, .search-panel, .visitor-hero, .mail-viewer-topbar { display: block; }
   .toolbar > *, .search-panel > * { min-width: 100%; }
-  .page-title-row, .topbar, .visitor-header, .card-header { align-items: flex-start; flex-direction: column; }
+  .page-title-row, .topbar, .visitor-header, .visitor-email-head, .card-header { align-items: flex-start; flex-direction: column; }
   .sidebar-nav { grid-template-columns: 1fr; }
   .hero-auth { width: min(100vw - 24px, 100%); padding: 24px 0; gap: 22px; }
   .auth-card, .setup-card { padding: 24px; }
   .setup-shell { padding: 18px 12px; }
   .email-card { grid-template-columns: 1fr; }
   .detail-row { grid-template-columns: 1fr; gap: 4px; }
+  .mail-viewer-topbar input, .mail-viewer-topbar button { width: 100%; margin-bottom: 8px; }
+  .mail-detail-view { padding: 14px; }
+  .list-item-card { display: grid; }
+  .item-actions { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }

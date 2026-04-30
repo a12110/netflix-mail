@@ -1,32 +1,21 @@
-# Netflix Mail UI 重设计代码评审
+# Copilot Check
 
-## 评审范围
-- `src/views/layout.ts`：共享 UI 设计系统、响应式布局、表单/按钮/表格/卡片样式。
-- `src/views/admin.ts`：管理员登录页、后台邮件中心、规则管理、分享链接 UI。
-- `src/views/setup.ts`：初始化管理员向导页。
-- `src/views/visitor.ts`：访客访问代码页。
-- `test/views.test.ts`：关键 DOM hooks 与 token 嵌入安全断言。
-- `README.md`：界面入口说明。
+## 2026-04-30 用户侧邮件显示同步评审
 
-## 检查结论
-通过。此次修改仅调整前端模板和样式，不改变后端 API、路由、数据库结构或业务数据格式。
+### 结论
+- 通过。访客页已同步后台邮件正文显示逻辑：优先 HTML iframe 正文预览，纯文本邮件回退到清洗后的 `pre.mail-body`。
+- 访客页不展示后台高级信息（Headers、Attachments、HTML 原文等）。
 
-## 评审维度
-- 逻辑正确性：保留登录、登出、邮件查询、邮件详情、规则创建/停用、分享链接创建/停用、访客刷新等原事件绑定和接口路径。
-- 兼容性：保留计划要求的关键 DOM hooks；新增测试覆盖 `/admin`、`/setup`、`/v/:token` 的关键结构。
-- 安全性：动态渲染内容继续通过 `escapeText` 转义；访客 token 使用 JSON 字符串嵌入并转义 `<`，避免脚本闭合注入。
-- 可维护性：未引入新依赖或构建链；共享视觉能力集中在 `layout.ts`；单个视图文件均低于 500 行。
-- 性能：仍为服务端一次性输出静态 HTML/CSS/vanilla JS；无额外网络资源或 CDN 请求。
-- 可访问性：保留语义表单控件；新增 `focus-visible`、足够对比度、`prefers-reduced-motion` 支持。
+### 关键检查
+- 逻辑正确性：`/api/visitor/:token/emails` 返回 `bodyText`、`bodyHtml`、`trustedAuthentication`，前端根据认证状态决定是否自动加载远程图片/链接。
+- 安全性：iframe 继续禁用 script、form、object、embed、frame、connect；默认 `referrerpolicy="no-referrer"`；未可信认证时拦截外部 `src/srcset/href`，需要用户点击确认后才加载。
+- 兼容性：保留原 `body`、`codes`、`contentTruncated` 字段，保留 `#emails`、`#refresh`、`#status` DOM hooks。
+- UI：访客邮件卡片改为纵向详情结构，避免正文挤压；复用 `.mail-frame`、`.mail-risk`、`.mail-body`。
 
-## 验证记录
-- `yarn run check`：通过。
-- 结果：9 个测试文件通过，21 个测试通过。
+### 验证
+- `yarn run check`：通过，10 个测试文件 / 26 个测试。
+- in-app browser：已打开 `http://localhost:8787/v/test`，确认访客页 shell 正常加载，过期 token 显示“链接不可用或已过期”。
 
-## 已知问题
-暂无已知阻塞或未闭环问题。建议后续在本地启动 `yarn dev` 后进行浏览器视觉验收。
-
-## 追加评审记录
-- 后台模块已由同页锚点切换改为独立路由渲染，脚本通过 `currentPage` 只初始化当前页面所需模块。
-- 登录页不再展示 `/setup` 入口，减少普通登录入口暴露初始化路径。
-- `test/views.test.ts` 已覆盖默认邮件页、规则页、分享链接页的模块隔离，避免后续回退为同页堆叠。
+### 风险/建议
+- 可信认证判断基于邮件头中的 `Authentication-Results`/`ARC-Authentication-Results` 字符串；如果上游解析器未保存这些头，则会按不可信处理并提示用户手动加载。
+- 访客页现在会从 API 返回邮件正文 HTML，但仍在浏览器端 iframe 中清洗/沙箱展示，不返回高级元信息。

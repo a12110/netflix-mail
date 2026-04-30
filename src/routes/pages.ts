@@ -9,6 +9,7 @@ export function registerPageRoutes(app: Hono<AppEnv>): void {
   app.get("/admin", (c) => c.html(adminPage("mail")));
   app.get("/admin/rules", (c) => c.html(adminPage("rules")));
   app.get("/admin/share-links", (c) => c.html(adminPage("share")));
+  app.get("/admin/database", (c) => c.html(adminPage("database")));
   app.get("/setup", (c) => c.html(setupPage()));
   app.get("/v/:token", (c) => c.html(visitorPage(c.req.param("token"))));
 }

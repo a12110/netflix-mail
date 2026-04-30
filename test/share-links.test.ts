@@ -5,6 +5,7 @@ import type { ShareLinkRow } from "../src/types";
 const link: ShareLinkRow = {
   id: 1,
   name: "Visitor",
+  token: "token",
   token_hash: "hash",
   expires_at: null,
   status: "active",

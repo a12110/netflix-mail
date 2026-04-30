@@ -2318,6 +2318,205 @@ function sessionClearCookie() {
 }
 __name(sessionClearCookie, "sessionClearCookie");
 
+// src/services/database.ts
+var MIGRATION_TABLE_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY,
+  description TEXT NOT NULL,
+  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+)`;
+var INITIAL_SCHEMA_SQL = String.raw`
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS admins (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  username TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  last_login_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS emails (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_id TEXT,
+  envelope_from TEXT NOT NULL,
+  envelope_to TEXT NOT NULL,
+  from_address TEXT,
+  to_addresses_json TEXT NOT NULL DEFAULT '[]',
+  subject TEXT,
+  sent_at TEXT,
+  received_at TEXT NOT NULL,
+  raw_size INTEGER NOT NULL DEFAULT 0,
+  has_attachments INTEGER NOT NULL DEFAULT 0,
+  attachment_count INTEGER NOT NULL DEFAULT 0,
+  attachments_json TEXT NOT NULL DEFAULT '[]',
+  content_truncated INTEGER NOT NULL DEFAULT 0,
+  parse_status TEXT NOT NULL DEFAULT 'parsed',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS email_content_chunks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id INTEGER NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('headers', 'text', 'html')),
+  chunk_index INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE,
+  UNIQUE (email_id, kind, chunk_index)
+);
+
+CREATE TABLE IF NOT EXISTS email_codes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  email_id INTEGER NOT NULL,
+  code TEXT NOT NULL,
+  source TEXT NOT NULL CHECK (source IN ('subject', 'text', 'html')),
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  FOREIGN KEY (email_id) REFERENCES emails(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS rules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  fields_json TEXT NOT NULL DEFAULT '["subject","text","html","code"]',
+  keyword TEXT NOT NULL,
+  match_mode TEXT NOT NULL DEFAULT 'contains' CHECK (match_mode IN ('contains', 'exact')),
+  case_sensitive INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE TABLE IF NOT EXISTS share_links (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT,
+  token_hash TEXT NOT NULL UNIQUE,
+  expires_at TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
+  window_minutes INTEGER NOT NULL DEFAULT 30,
+  created_by_admin_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  last_accessed_at TEXT,
+  FOREIGN KEY (created_by_admin_id) REFERENCES admins(id)
+);
+
+CREATE TABLE IF NOT EXISTS share_link_rules (
+  share_link_id INTEGER NOT NULL,
+  rule_id INTEGER NOT NULL,
+  PRIMARY KEY (share_link_id, rule_id),
+  FOREIGN KEY (share_link_id) REFERENCES share_links(id) ON DELETE CASCADE,
+  FOREIGN KEY (rule_id) REFERENCES rules(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS access_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  actor_type TEXT NOT NULL CHECK (actor_type IN ('admin', 'visitor', 'system')),
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  ip TEXT,
+  user_agent TEXT,
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_emails_received_at ON emails(received_at DESC);
+CREATE INDEX IF NOT EXISTS idx_emails_from ON emails(from_address);
+CREATE INDEX IF NOT EXISTS idx_emails_envelope_to ON emails(envelope_to);
+CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email_id);
+CREATE INDEX IF NOT EXISTS idx_email_codes_code ON email_codes(code);
+CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_share_links_status ON share_links(status);
+CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at DESC);
+`;
+var SHARE_LINK_TOKEN_SQL = String.raw`
+ALTER TABLE share_links ADD COLUMN token TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token);
+`;
+var DATABASE_MIGRATIONS = [
+  { id: "0001_initial", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
+  { id: "0002_share_link_token", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL }
+];
+async function ensureDatabaseSchema(db) {
+  return await applyPendingDatabaseMigrations(db);
+}
+__name(ensureDatabaseSchema, "ensureDatabaseSchema");
+async function getDatabaseStatus(db) {
+  await ensureMigrationTable(db);
+  return { migrations: await listMigrationStatus(db), appliedMigrations: [] };
+}
+__name(getDatabaseStatus, "getDatabaseStatus");
+async function applyPendingDatabaseMigrations(db) {
+  await ensureMigrationTable(db);
+  const applied = await appliedMigrationIds(db);
+  const appliedMigrations = [];
+  for (const migration of DATABASE_MIGRATIONS) {
+    if (applied.has(migration.id)) continue;
+    await applyMigration(db, migration);
+    await markMigrationApplied(db, migration);
+    applied.add(migration.id);
+    appliedMigrations.push(migration.id);
+  }
+  return { migrations: await listMigrationStatus(db), appliedMigrations };
+}
+__name(applyPendingDatabaseMigrations, "applyPendingDatabaseMigrations");
+async function applyMigration(db, migration) {
+  if (migration.id === "0002_share_link_token") {
+    await applyShareLinkTokenMigration(db);
+    return;
+  }
+  await runSqlStatements(db, migration.sql);
+}
+__name(applyMigration, "applyMigration");
+async function applyShareLinkTokenMigration(db) {
+  if (!await columnExists(db, "share_links", "token")) {
+    await db.prepare("ALTER TABLE share_links ADD COLUMN token TEXT").run();
+  }
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token)").run();
+}
+__name(applyShareLinkTokenMigration, "applyShareLinkTokenMigration");
+async function ensureMigrationTable(db) {
+  await db.prepare(MIGRATION_TABLE_SQL).run();
+}
+__name(ensureMigrationTable, "ensureMigrationTable");
+async function appliedMigrationIds(db) {
+  const result = await db.prepare("SELECT id FROM schema_migrations").all();
+  return new Set(result.results.map((row) => row.id));
+}
+__name(appliedMigrationIds, "appliedMigrationIds");
+async function listMigrationStatus(db) {
+  const result = await db.prepare("SELECT id, applied_at FROM schema_migrations").all();
+  const applied = new Map(result.results.map((row) => [row.id, row.applied_at]));
+  return DATABASE_MIGRATIONS.map((migration) => ({
+    id: migration.id,
+    description: migration.description,
+    applied: applied.has(migration.id),
+    appliedAt: applied.get(migration.id) ?? null
+  }));
+}
+__name(listMigrationStatus, "listMigrationStatus");
+async function markMigrationApplied(db, migration) {
+  await db.prepare(
+    `INSERT OR REPLACE INTO schema_migrations (id, description, applied_at)
+       VALUES (?1, ?2, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`
+  ).bind(migration.id, migration.description).run();
+}
+__name(markMigrationApplied, "markMigrationApplied");
+async function columnExists(db, table, column) {
+  const result = await db.prepare(`PRAGMA table_info(${table})`).all();
+  return result.results.some((row) => row.name === column);
+}
+__name(columnExists, "columnExists");
+async function runSqlStatements(db, sql) {
+  for (const statement of splitSqlStatements(sql)) {
+    await db.prepare(statement).run();
+  }
+}
+__name(runSqlStatements, "runSqlStatements");
+function splitSqlStatements(sql) {
+  return sql.split(";").map((statement) => statement.trim()).filter(Boolean);
+}
+__name(splitSqlStatements, "splitSqlStatements");
+
 // node_modules/postal-mime/src/decode-strings.js
 var textEncoder = new TextEncoder();
 var base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -6186,38 +6385,112 @@ var PostalMime = class _PostalMime {
   }
 };
 
+// src/utils/text.ts
+var HTML_ENTITY_MAP = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: " "
+};
+var INVISIBLE_CHARS = /[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g;
+function stripHtml(html) {
+  return decodeHtmlEntities(
+    html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<br\s*\/?>/gi, "\n").replace(/<\/p\s*>/gi, "\n").replace(/<\/div\s*>/gi, "\n").replace(/<[^>]+>/g, " ")
+  ).replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+__name(stripHtml, "stripHtml");
+function cleanEmailBody(value) {
+  const lines = value.replace(/\r\n?/g, "\n").replace(INVISIBLE_CHARS, "").split("\n").map((line) => line.replace(/[ \t]+$/g, ""));
+  return collapseBlankLines(removeForwardedHeader(lines)).trim();
+}
+__name(cleanEmailBody, "cleanEmailBody");
+function previewText(value, length = 600) {
+  const trimmed = cleanEmailBody(value).replace(/\s+/g, " ").trim();
+  return trimmed.length > length ? `${trimmed.slice(0, length)}...` : trimmed;
+}
+__name(previewText, "previewText");
+function decodeHtmlEntities(value) {
+  return value.replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (entity, body) => {
+    const normalized = body.toLowerCase();
+    if (normalized.startsWith("#x")) {
+      return codePointToString(Number.parseInt(normalized.slice(2), 16), entity);
+    }
+    if (normalized.startsWith("#")) {
+      return codePointToString(Number.parseInt(normalized.slice(1), 10), entity);
+    }
+    return HTML_ENTITY_MAP[normalized] ?? entity;
+  });
+}
+__name(decodeHtmlEntities, "decodeHtmlEntities");
+function removeForwardedHeader(lines) {
+  const output = [];
+  let skippingForwardHeader = false;
+  for (const line of lines) {
+    if (/^-+\s*Forwarded message\s*-+$/i.test(line.trim())) {
+      skippingForwardHeader = true;
+      continue;
+    }
+    if (skippingForwardHeader && line.trim() === "") {
+      skippingForwardHeader = false;
+      continue;
+    }
+    if (skippingForwardHeader && isForwardHeaderLine(line)) {
+      continue;
+    }
+    skippingForwardHeader = false;
+    output.push(line);
+  }
+  return output;
+}
+__name(removeForwardedHeader, "removeForwardedHeader");
+function isForwardHeaderLine(line) {
+  return /^(发件人|寄件者|收件人|主题|日期|from|to|subject|date)[:：]/i.test(line.trim());
+}
+__name(isForwardHeaderLine, "isForwardHeaderLine");
+function collapseBlankLines(lines) {
+  const output = [];
+  for (const line of lines) {
+    if (line.trim() === "" && output.at(-1)?.trim() === "") {
+      continue;
+    }
+    output.push(line);
+  }
+  return output.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+__name(collapseBlankLines, "collapseBlankLines");
+function codePointToString(codePoint, fallback) {
+  return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : fallback;
+}
+__name(codePointToString, "codePointToString");
+
 // src/services/codes.ts
 var CODE_PATTERN = /\b(?:\d{4,8}|(?=[A-Za-z0-9]*\d)(?=[A-Za-z0-9]*[A-Za-z])[A-Za-z0-9]{4,8})\b/g;
+var KEYWORD_PATTERN = /(验证码|校验码|动态码|登录代码|代码|code|verification|passcode|otp|security)/i;
+var URL_PATTERN = /<?https?:\/\/\S+>?/gi;
+var EMAIL_PATTERN = /\b[\w.%+-]+@[\w.-]+\.[A-Za-z]{2,}\b/g;
+var UUID_PATTERN = /\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b/gi;
 function extractCodesFromText(value, source) {
-  const matches = value.match(CODE_PATTERN) ?? [];
+  const searchable = searchableText(value, source);
   const seen = /* @__PURE__ */ new Set();
   const codes = [];
-  for (const match2 of matches) {
-    const code = match2.toUpperCase();
-    const key = `${source}:${code}`;
-    if (!seen.has(key)) {
-      seen.add(key);
-      codes.push({ code, source });
+  for (const match2 of rawMatches(searchable)) {
+    const code = match2.code.toUpperCase();
+    if (seen.has(code) || !isUsableCode(code, searchable, match2.index)) {
+      continue;
     }
+    seen.add(code);
+    codes.push({ code, source });
   }
   return codes;
 }
 __name(extractCodesFromText, "extractCodesFromText");
 function extractCodes(input) {
-  const seen = /* @__PURE__ */ new Set();
-  const candidates = [
-    ...extractCodesFromText(input.subject ?? "", "subject"),
-    ...extractCodesFromText(input.text ?? "", "text"),
-    ...extractCodesFromText(input.html ?? "", "html")
-  ];
-  return candidates.filter((candidate) => {
-    const key = `${candidate.source}:${candidate.code}`;
-    if (seen.has(key)) {
-      return false;
-    }
-    seen.add(key);
-    return true;
-  });
+  const subjectCodes = extractCodesFromText(input.subject ?? "", "subject");
+  const textCodes = extractCodesFromText(input.text ?? "", "text");
+  const htmlCodes = textCodes.length > 0 ? [] : extractCodesFromText(input.html ?? "", "html");
+  return dedupeByCode([...subjectCodes, ...textCodes, ...htmlCodes]);
 }
 __name(extractCodes, "extractCodes");
 async function insertCodes(db, emailId, codes) {
@@ -6231,6 +6504,62 @@ async function insertCodes(db, emailId, codes) {
   );
 }
 __name(insertCodes, "insertCodes");
+function searchableText(value, source) {
+  const text = source === "html" ? stripHtml(value) : value;
+  return text.replace(URL_PATTERN, " ").replace(EMAIL_PATTERN, " ").replace(UUID_PATTERN, " ").split(/\r?\n/).filter((line) => !/^\s*SRC\s*:/i.test(line)).join("\n");
+}
+__name(searchableText, "searchableText");
+function rawMatches(value) {
+  return [...value.matchAll(CODE_PATTERN)].map((match2) => ({ code: match2[0], index: match2.index ?? 0 }));
+}
+__name(rawMatches, "rawMatches");
+function isUsableCode(code, text, index) {
+  if (isCssUnit(code) || isYear(code) || isGuidSegment(text, index, code.length)) {
+    return false;
+  }
+  if (hasKeywordContext(text, index, code.length)) {
+    return true;
+  }
+  if (/^\d{4}$/.test(code)) {
+    return false;
+  }
+  return /^[A-Z0-9]{5,8}$/i.test(code) && !isLikelyCssColor(code, text, index);
+}
+__name(isUsableCode, "isUsableCode");
+function hasKeywordContext(text, index, length) {
+  const start = Math.max(0, index - 90);
+  const end = Math.min(text.length, index + length + 90);
+  return KEYWORD_PATTERN.test(text.slice(start, end));
+}
+__name(hasKeywordContext, "hasKeywordContext");
+function isCssUnit(code) {
+  return /^\d{1,4}PX$/i.test(code);
+}
+__name(isCssUnit, "isCssUnit");
+function isYear(code) {
+  const value = Number(code);
+  return /^\d{4}$/.test(code) && value >= 1900 && value <= 2099;
+}
+__name(isYear, "isYear");
+function isGuidSegment(text, index, length) {
+  return text[index - 1] === "-" || text[index + length] === "-" || text[index - 1] === "_" || text[index + length] === "_";
+}
+__name(isGuidSegment, "isGuidSegment");
+function isLikelyCssColor(code, text, index) {
+  return /^[A-F0-9]{6}$/i.test(code) && /[#:]\s*$/i.test(text.slice(Math.max(0, index - 3), index));
+}
+__name(isLikelyCssColor, "isLikelyCssColor");
+function dedupeByCode(candidates) {
+  const seen = /* @__PURE__ */ new Set();
+  return candidates.filter((candidate) => {
+    if (seen.has(candidate.code)) {
+      return false;
+    }
+    seen.add(candidate.code);
+    return true;
+  });
+}
+__name(dedupeByCode, "dedupeByCode");
 
 // src/services/content.ts
 function takeUtf8Bytes(value, maxBytes) {
@@ -6394,12 +6723,14 @@ async function getEmailDetail(db, id) {
   if (!row) {
     return null;
   }
-  const [chunks, codes] = await Promise.all([getContentChunks(db, id), listCodes(db, id)]);
+  const [chunks, storedCodes] = await Promise.all([getContentChunks(db, id), listCodes(db, id)]);
+  const content = reconstructContent(chunks);
+  const codes = materializeCodeRows(id, storedCodes, extractCodes({ subject: row.subject, text: content.text, html: content.html }));
   return {
     ...row,
     toAddresses: parseJsonArray(row.to_addresses_json),
     attachments: parseJsonArray(row.attachments_json),
-    content: reconstructContent(chunks),
+    content,
     codes
   };
 }
@@ -6509,6 +6840,13 @@ function parseJsonArray(value) {
   }
 }
 __name(parseJsonArray, "parseJsonArray");
+function materializeCodeRows(emailId, storedRows, candidates) {
+  return candidates.map((candidate, index) => {
+    const stored = storedRows.find((row) => row.code === candidate.code && row.source === candidate.source);
+    return stored ?? { id: 0 - index, email_id: emailId, code: candidate.code, source: candidate.source, created_at: "" };
+  });
+}
+__name(materializeCodeRows, "materializeCodeRows");
 async function listCodes(db, emailId) {
   const result = await db.prepare("SELECT * FROM email_codes WHERE email_id = ?1 ORDER BY id").bind(emailId).all();
   return result.results;
@@ -6558,12 +6896,13 @@ async function listRules(db, includeDisabled = true) {
   return result.results;
 }
 __name(listRules, "listRules");
-async function getRulesByIds(db, ids) {
+async function getRulesByIds(db, ids, includeDisabled = false) {
   if (ids.length === 0) {
     return [];
   }
   const placeholders = ids.map((_, index) => `?${index + 1}`).join(", ");
-  const result = await db.prepare(`SELECT * FROM rules WHERE enabled = 1 AND id IN (${placeholders})`).bind(...ids).all();
+  const enabledClause = includeDisabled ? "" : "enabled = 1 AND ";
+  const result = await db.prepare(`SELECT * FROM rules WHERE ${enabledClause}id IN (${placeholders})`).bind(...ids).all();
   return result.results;
 }
 __name(getRulesByIds, "getRulesByIds");
@@ -6598,6 +6937,10 @@ async function updateRule(db, id, input) {
   ).run();
 }
 __name(updateRule, "updateRule");
+async function deleteRule(db, id) {
+  await db.prepare("DELETE FROM rules WHERE id = ?1").bind(id).run();
+}
+__name(deleteRule, "deleteRule");
 function normalize(value, caseSensitive) {
   return caseSensitive ? value : value.toLowerCase();
 }
@@ -6656,9 +6999,9 @@ async function createShareLink(db, input) {
   const token = randomToken();
   const tokenHash = await hashShareToken(token);
   const result = await db.prepare(
-    `INSERT INTO share_links (name, token_hash, expires_at, status, window_minutes, created_by_admin_id)
-       VALUES (?1, ?2, ?3, 'active', ?4, ?5)`
-  ).bind(input.name ?? null, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId).run();
+    `INSERT INTO share_links (name, token, token_hash, expires_at, status, window_minutes, created_by_admin_id)
+       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)`
+  ).bind(input.name ?? null, token, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId).run();
   const id = Number(result.meta.last_row_id);
   await db.batch(
     input.ruleIds.map(
@@ -6673,10 +7016,25 @@ async function listShareLinks(db) {
   return await Promise.all(result.results.map((row) => withRuleIds(db, row)));
 }
 __name(listShareLinks, "listShareLinks");
-async function setShareLinkStatus(db, id, status) {
-  await db.prepare("UPDATE share_links SET status = ?1 WHERE id = ?2").bind(status, id).run();
+async function updateShareLink(db, id, input) {
+  const updates = [];
+  const values = [];
+  addShareLinkUpdate(updates, values, "name", input.name);
+  addShareLinkUpdate(updates, values, "expires_at", input.expiresAt);
+  addShareLinkUpdate(updates, values, "status", input.status);
+  if (updates.length > 0) {
+    values.push(id);
+    await db.prepare(`UPDATE share_links SET ${updates.join(", ")} WHERE id = ?${values.length}`).bind(...values).run();
+  }
+  if (input.ruleIds) {
+    await replaceShareLinkRules(db, id, input.ruleIds);
+  }
 }
-__name(setShareLinkStatus, "setShareLinkStatus");
+__name(updateShareLink, "updateShareLink");
+async function deleteShareLink(db, id) {
+  await db.prepare("DELETE FROM share_links WHERE id = ?1").bind(id).run();
+}
+__name(deleteShareLink, "deleteShareLink");
 async function getShareLinkByToken(db, token) {
   const tokenHash = await hashShareToken(token);
   const row = await db.prepare("SELECT * FROM share_links WHERE token_hash = ?1").bind(tokenHash).first();
@@ -6696,6 +7054,26 @@ async function withRuleIds(db, row) {
   return { ...row, ruleIds: rules.results.map((rule) => rule.rule_id) };
 }
 __name(withRuleIds, "withRuleIds");
+function addShareLinkUpdate(updates, values, column, value) {
+  if (value === void 0) {
+    return;
+  }
+  values.push(value);
+  updates.push(`${column} = ?${values.length}`);
+}
+__name(addShareLinkUpdate, "addShareLinkUpdate");
+async function replaceShareLinkRules(db, id, ruleIds) {
+  await db.prepare("DELETE FROM share_link_rules WHERE share_link_id = ?1").bind(id).run();
+  if (ruleIds.length === 0) {
+    return;
+  }
+  await db.batch(
+    ruleIds.map(
+      (ruleId) => db.prepare("INSERT INTO share_link_rules (share_link_id, rule_id) VALUES (?1, ?2)").bind(id, ruleId)
+    )
+  );
+}
+__name(replaceShareLinkRules, "replaceShareLinkRules");
 
 // src/utils/http.ts
 async function readJson(c) {
@@ -6733,7 +7111,10 @@ __name(clampNumber, "clampNumber");
 
 // src/routes/admin.ts
 function registerAdminRoutes(app2) {
-  app2.get("/api/setup/status", async (c) => c.json({ ok: true, hasAdmin: await countAdmins(c.env.DB) > 0 }));
+  app2.get("/api/setup/status", async (c) => {
+    await ensureDatabaseSchema(c.env.DB);
+    return c.json({ ok: true, hasAdmin: await countAdmins(c.env.DB) > 0 });
+  });
   app2.post("/api/setup/admin", createFirstAdmin);
   app2.post("/api/admin/login", login);
   app2.post("/api/admin/logout", async (c) => {
@@ -6746,16 +7127,17 @@ function registerAdminRoutes(app2) {
   app2.get("/api/admin/rules", async (c) => withAdmin(c, () => adminListRules(c)));
   app2.post("/api/admin/rules", async (c) => withAdmin(c, () => adminCreateRule(c)));
   app2.patch("/api/admin/rules/:id", async (c) => withAdmin(c, () => adminUpdateRule(c)));
+  app2.delete("/api/admin/rules/:id", async (c) => withAdmin(c, () => adminDeleteRule(c)));
   app2.get("/api/admin/share-links", async (c) => withAdmin(c, () => adminListShareLinks(c)));
   app2.post("/api/admin/share-links", async (c) => withAdmin(c, (admin) => adminCreateShareLink(c, admin)));
   app2.patch("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminUpdateShareLink(c)));
+  app2.delete("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminDeleteShareLink(c)));
+  app2.get("/api/admin/database/status", async (c) => withAdmin(c, () => adminDatabaseStatus(c)));
+  app2.post("/api/admin/database/upgrade", async (c) => withAdmin(c, () => adminUpgradeDatabase(c)));
   app2.get("/api/admin/access-logs", async (c) => withAdmin(c, () => adminAccessLogs(c)));
 }
 __name(registerAdminRoutes, "registerAdminRoutes");
 async function createFirstAdmin(c) {
-  if (await countAdmins(c.env.DB) > 0) {
-    return forbidden(c, "Admin already exists.");
-  }
   if (!c.env.ADMIN_SETUP_TOKEN) {
     return c.json({ ok: false, error: "ADMIN_SETUP_TOKEN is required before setup." }, 500);
   }
@@ -6771,6 +7153,10 @@ async function createFirstAdmin(c) {
   }
   if (password.length < 10) {
     return badRequest(c, "Password must be at least 10 characters.");
+  }
+  await ensureDatabaseSchema(c.env.DB);
+  if (await countAdmins(c.env.DB) > 0) {
+    return forbidden(c, "Admin already exists.");
   }
   const id = await createAdmin(c.env.DB, username, password);
   await writeAccessLog(c.env.DB, { actorType: "system", actorId: id, action: "admin.created", request: c.req.raw });
@@ -6846,8 +7232,18 @@ async function adminUpdateRule(c) {
   return c.json({ ok: true });
 }
 __name(adminUpdateRule, "adminUpdateRule");
+async function adminDeleteRule(c) {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid rule id.");
+  }
+  await deleteRule(c.env.DB, id);
+  return c.json({ ok: true });
+}
+__name(adminDeleteRule, "adminDeleteRule");
 async function adminListShareLinks(c) {
-  return c.json({ ok: true, links: await listShareLinks(c.env.DB) });
+  const links = await listShareLinks(c.env.DB);
+  return c.json({ ok: true, links: links.map((link) => publicShareLink(c, link)) });
 }
 __name(adminListShareLinks, "adminListShareLinks");
 async function adminCreateShareLink(c, admin) {
@@ -6879,14 +7275,35 @@ async function adminCreateShareLink(c, admin) {
 __name(adminCreateShareLink, "adminCreateShareLink");
 async function adminUpdateShareLink(c) {
   const id = Number(c.req.param("id"));
-  const body = await readJson(c);
-  if (!Number.isInteger(id) || body?.status !== "active" && body?.status !== "disabled") {
+  const body = await readJson(c) ?? {};
+  if (!Number.isInteger(id) || !isValidShareStatus(body.status)) {
     return badRequest(c, "Invalid share link update.");
   }
-  await setShareLinkStatus(c.env.DB, id, body.status);
+  const update = await buildShareLinkUpdate(c, body);
+  if (!update) {
+    return badRequest(c, "Invalid share link update.");
+  }
+  await updateShareLink(c.env.DB, id, update);
   return c.json({ ok: true });
 }
 __name(adminUpdateShareLink, "adminUpdateShareLink");
+async function adminDeleteShareLink(c) {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid share link id.");
+  }
+  await deleteShareLink(c.env.DB, id);
+  return c.json({ ok: true });
+}
+__name(adminDeleteShareLink, "adminDeleteShareLink");
+async function adminDatabaseStatus(c) {
+  return c.json({ ok: true, ...await getDatabaseStatus(c.env.DB) });
+}
+__name(adminDatabaseStatus, "adminDatabaseStatus");
+async function adminUpgradeDatabase(c) {
+  return c.json({ ok: true, ...await applyPendingDatabaseMigrations(c.env.DB) });
+}
+__name(adminUpgradeDatabase, "adminUpgradeDatabase");
 async function adminAccessLogs(c) {
   const limit = clampNumber(c.req.query("limit") ?? null, 50, 1, 100);
   const result = await c.env.DB.prepare("SELECT * FROM access_logs ORDER BY created_at DESC LIMIT ?1").bind(limit).all();
@@ -6902,6 +7319,21 @@ function publicAdmin(admin) {
   };
 }
 __name(publicAdmin, "publicAdmin");
+function publicShareLink(c, link) {
+  return {
+    id: link.id,
+    name: link.name,
+    expires_at: link.expires_at,
+    status: link.status,
+    window_minutes: link.window_minutes,
+    created_by_admin_id: link.created_by_admin_id,
+    created_at: link.created_at,
+    last_accessed_at: link.last_accessed_at,
+    ruleIds: link.ruleIds,
+    url: link.token ? new URL(`/v/${link.token}`, c.req.url).toString() : null
+  };
+}
+__name(publicShareLink, "publicShareLink");
 function normalizeExpiresAt(value) {
   if (!value) {
     return null;
@@ -6910,6 +7342,207 @@ function normalizeExpiresAt(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 __name(normalizeExpiresAt, "normalizeExpiresAt");
+function isValidShareStatus(status) {
+  return status === void 0 || status === "active" || status === "disabled";
+}
+__name(isValidShareStatus, "isValidShareStatus");
+async function buildShareLinkUpdate(c, body) {
+  const update = {};
+  if ("name" in body) update.name = body.name?.trim() || null;
+  if ("expiresAt" in body) update.expiresAt = normalizeExpiresAt(body.expiresAt);
+  if (body.status) update.status = body.status;
+  if (Array.isArray(body.ruleIds)) {
+    const ruleIds = body.ruleIds.filter(Number.isInteger);
+    if (ruleIds.length === 0) return null;
+    const uniqueRuleIds = [...new Set(ruleIds)];
+    const rules = await getRulesByIds(c.env.DB, uniqueRuleIds, true);
+    if (rules.length !== uniqueRuleIds.length) return null;
+    update.ruleIds = uniqueRuleIds;
+  }
+  return Object.keys(update).length > 0 ? update : null;
+}
+__name(buildShareLinkUpdate, "buildShareLinkUpdate");
+
+// src/views/mail-styles.ts
+var MAIL_STYLES = String.raw`
+.mail-viewer-shell {
+  padding: 10px 12px 16px;
+  background: var(--surface);
+  border-color: var(--line);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+.mail-viewer-shell .muted { color: var(--muted); }
+.mail-viewer-topbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.mail-viewer-topbar input {
+  min-height: 34px;
+  border-color: var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.86);
+  color: var(--text);
+}
+.mail-viewer-topbar input:focus {
+  border-color: rgba(11, 116, 222, 0.72);
+  box-shadow: 0 0 0 4px rgba(11, 116, 222, 0.12);
+  background: #fff;
+}
+.mail-viewer-topbar button,
+.mail-viewer-controls button,
+.mail-action-row button,
+.mail-detail-nav button {
+  min-height: 32px;
+  border-color: var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--primary);
+  padding: 6px 12px;
+  box-shadow: var(--shadow-sm);
+}
+.mail-viewer-topbar button:not(.secondary) {
+  background: linear-gradient(135deg, var(--primary), #0869c9);
+  border-color: var(--primary);
+  color: #fff;
+}
+.mail-viewer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 0 0 10px;
+}
+.mail-control-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--muted-strong);
+  border: 1px solid #cfe3ff;
+  font-weight: 700;
+}
+.mail-control-chip strong { color: var(--primary); }
+.mail-viewer-grid {
+  display: grid;
+  grid-template-columns: minmax(290px, 380px) minmax(0, 1fr);
+  min-height: min(780px, calc(100vh - 220px));
+  border-top: 1px solid var(--line);
+}
+.mail-list-panel {
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  background: var(--surface-solid);
+}
+.mail-list-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+}
+.mail-list-title span { color: var(--muted); font-size: 12px; }
+.mail-list {
+  display: grid;
+  align-content: start;
+  max-height: min(730px, calc(100vh - 260px));
+  overflow: auto;
+}
+button.mail-list-item {
+  display: grid;
+  width: 100%;
+  min-height: unset;
+  justify-content: stretch;
+  align-items: start;
+  gap: 9px;
+  padding: 15px 18px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: var(--surface-solid);
+  color: var(--text);
+  text-align: left;
+  box-shadow: none;
+}
+button.mail-list-item:hover,
+button.mail-list-item.selected {
+  background: #eef6ff;
+  color: var(--text);
+  border-left-color: var(--primary);
+  box-shadow: none;
+}
+.mail-list-tags,
+.mail-meta-row,
+.mail-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.mail-meta-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 27px;
+  padding: 2px 7px;
+  border: 1px solid rgba(96, 165, 250, 0.48);
+  color: var(--primary);
+  background: #f7fbff;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mail-meta-pill strong { color: var(--primary-dark); margin-right: 4px; }
+.mail-detail-panel {
+  min-width: 0;
+  background: var(--surface-solid);
+  color: var(--text);
+}
+.mail-detail-view { display: grid; gap: 16px; padding: 14px 24px 24px; }
+.mail-detail-nav { display: flex; justify-content: space-between; gap: 12px; }
+.mail-detail-header { display: grid; gap: 14px; padding-top: 4px; }
+.mail-detail-header h2 { font-size: 20px; }
+.mail-preview-stage {
+  min-height: 520px;
+  padding: 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow: auto;
+}
+.mail-preview-stage .mail-body { max-height: none; min-height: 520px; border: 0; border-radius: 0; background: #fff; color: var(--text); }
+.mail-preview-stage .mail-frame {
+  min-height: min(760px, calc(100vh - 320px));
+  border: 0;
+  border-radius: 0;
+}
+.mail-list .empty-state, .mail-empty-detail { color: var(--muted); background: var(--surface); border-color: var(--line-strong); }
+.mail-plain-panel {
+  max-height: 420px;
+  background: #fbfdff;
+  border-color: var(--line);
+  color: #334155;
+}
+.mail-empty-detail { margin: 24px; }
+.email-card { display: grid; grid-template-columns: 64px minmax(0, 1.2fr) minmax(240px, 1fr) 170px; gap: 18px; align-items: center; padding: 20px 24px; margin-bottom: 14px; }
+.email-body-preview { color: var(--muted-strong); }
+.empty-state { padding: 32px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+.mail-body { max-height: 560px; line-height: 1.75; background: #fbfdff; }
+.mail-frame { width: 100%; min-height: 680px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: #fff; }
+.mail-risk { display: grid; gap: 10px; margin-bottom: 12px; padding: 14px; border: 1px solid #fed7aa; border-radius: var(--radius-sm); background: #fff7ed; color: #9a3412; }
+.mail-risk button { width: fit-content; }
+.advanced-info { border: 1px solid var(--line); border-radius: var(--radius-md); padding: 14px 16px; background: var(--surface-muted); }
+.advanced-info summary { cursor: pointer; font-weight: 800; color: var(--primary); }
+.advanced-info h3 { margin-top: 14px; }
+`;
 
 // src/views/layout.ts
 function escapeHtml2(value) {
@@ -7117,6 +7750,11 @@ pre {
   background: var(--success-soft);
   border-color: #bbf7d0;
 }
+.code-label {
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0;
+}
 .chips { display: flex; flex-wrap: wrap; gap: 8px; }
 .checkbox-pill {
   display: inline-flex;
@@ -7135,6 +7773,48 @@ pre {
 .status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.14); }
 .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
 .table-wrap table { min-width: 720px; }
+.modal-card {
+  width: min(680px, calc(100vw - 32px));
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  padding: 0;
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-md);
+}
+.modal-card::backdrop { background: rgba(15, 23, 42, 0.38); backdrop-filter: blur(4px); }
+.modal-form { padding: 22px; }
+.modal-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
+.list-item-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  margin-bottom: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-sm);
+}
+.item-main { display: grid; gap: 12px; min-width: 0; }
+.item-title-row, .item-meta, .item-actions, .generated-link {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.item-title-row strong { font-size: 16px; }
+.item-actions { justify-content: flex-end; flex: 0 0 auto; }
+.item-actions button { min-height: 36px; padding: 7px 12px; }
+.generated-link {
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 13px 14px;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius-md);
+  background: var(--success-soft);
+  color: #166534;
+}
+.generated-link span { min-width: 0; overflow-wrap: anywhere; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .metric-card { gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 850; letter-spacing: -0.04em; margin-top: 4px; }
@@ -7175,6 +7855,7 @@ pre {
 .detail-row { display: grid; grid-template-columns: 110px 1fr; gap: 14px; padding: 8px 0; color: var(--muted-strong); }
 .hero-auth { min-height: 100vh; display: grid; grid-template-columns: minmax(280px, 420px) 520px; gap: 54px; align-items: center; width: min(1320px, calc(100vw - 48px)); margin: 0 auto; padding: 48px 0; background: transparent; border: 0; box-shadow: none; }
 .hero-copy { display: grid; gap: 28px; }
+.auth-loading { min-height: 100vh; display: grid; place-content: center; gap: 18px; text-align: center; }
 .compact-hero { align-content: center; gap: 22px; }
 .hero-copy p { font-size: 17px; color: var(--muted-strong); }
 .hero-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -7193,9 +7874,8 @@ pre {
 .visitor-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 28px; }
 .visitor-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 28px; margin-bottom: 22px; }
 .visitor-count { font-size: 28px; font-weight: 850; color: var(--primary); }
-.email-card { display: grid; grid-template-columns: 64px minmax(0, 1.2fr) minmax(240px, 1fr) 170px; gap: 18px; align-items: center; padding: 20px 24px; margin-bottom: 14px; }
-.email-body-preview { color: var(--muted-strong); }
-.empty-state { padding: 32px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+.mail-reader-page { width: min(1600px, calc(100vw - 32px)); }
+${MAIL_STYLES}
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; padding: 18px; }
@@ -7205,19 +7885,25 @@ pre {
   .hero-auth { grid-template-columns: 1fr; }
   .metric-grid, .hero-features { grid-template-columns: 1fr; }
   .email-card { grid-template-columns: 54px 1fr; }
+  .mail-viewer-grid { grid-template-columns: 1fr; }
+  .mail-list-panel { border-right: 0; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 760px) {
   main, .dashboard-main, .visitor-shell { width: min(100vw - 24px, 100%); margin-top: 16px; }
   section { padding: 16px; }
-  .grid, .search-panel, .visitor-hero { display: block; }
+  .grid, .search-panel, .visitor-hero, .mail-viewer-topbar { display: block; }
   .toolbar > *, .search-panel > * { min-width: 100%; }
-  .page-title-row, .topbar, .visitor-header, .card-header { align-items: flex-start; flex-direction: column; }
+  .page-title-row, .topbar, .visitor-header, .visitor-email-head, .card-header { align-items: flex-start; flex-direction: column; }
   .sidebar-nav { grid-template-columns: 1fr; }
   .hero-auth { width: min(100vw - 24px, 100%); padding: 24px 0; gap: 22px; }
   .auth-card, .setup-card { padding: 24px; }
   .setup-shell { padding: 18px 12px; }
   .email-card { grid-template-columns: 1fr; }
   .detail-row { grid-template-columns: 1fr; gap: 4px; }
+  .mail-viewer-topbar input, .mail-viewer-topbar button { width: 100%; margin-bottom: 8px; }
+  .mail-detail-view { padding: 14px; }
+  .list-item-card { display: grid; }
+  .item-actions { justify-content: flex-start; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
@@ -7227,168 +7913,158 @@ function styles() {
 }
 __name(styles, "styles");
 
-// src/views/admin.ts
-function adminPage(section = "mail") {
-  return page("\u7BA1\u7406\u5458\u540E\u53F0", adminBody(section), adminScript(section));
-}
-__name(adminPage, "adminPage");
-var MAIL_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
-var SHIELD_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="m9 12 2 2 4-5" stroke-width="2"/></svg>`;
-var LINK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" stroke-width="2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" stroke-width="2"/></svg>`;
-var RULE_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M7 12h10M10 19h4" stroke-width="2" stroke-linecap="round"/></svg>`;
-var TITLES = {
-  mail: "\u90AE\u4EF6\u4E2D\u5FC3",
-  rules: "\u89C4\u5219\u7BA1\u7406",
-  share: "\u5206\u4EAB\u94FE\u63A5"
-};
-function adminBody(section) {
-  return String.raw`
-${loginSection()}
-<div id="app-section" class="app-shell hidden">
-  <aside class="sidebar">
-    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>邮件管家</span></div>
-    <nav class="sidebar-nav" aria-label="后台导航">
-      ${navItem("mail", section, "/admin", MAIL_ICON, "\u90AE\u4EF6\u4E2D\u5FC3")}
-      ${navItem("rules", section, "/admin/rules", RULE_ICON, "\u89C4\u5219\u7BA1\u7406")}
-      ${navItem("share", section, "/admin/share-links", LINK_ICON, "\u5206\u4EAB\u94FE\u63A5")}
-    </nav>
-    <div class="sidebar-footer">
-      <div class="inline-status"><span class="status-dot"></span><span>系统运行正常</span></div>
-    </div>
-  </aside>
-  <div class="content-shell">
-    <header class="topbar">
-      <div><p class="page-kicker">Netflix Mail Console</p><h2>${TITLES[section]}</h2></div>
-      <div class="toolbar">
-        <span id="admin-name" class="badge muted-badge"></span>
-        <button id="logout" class="secondary hidden" type="button">退出登录</button>
-      </div>
-    </header>
-    <main class="dashboard-main">${moduleContent(section)}</main>
-  </div>
-</div>`;
-}
-__name(adminBody, "adminBody");
-function loginSection() {
-  return String.raw`<section id="login-section" class="hero-auth">
-  <div class="hero-copy compact-hero">
-    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>Netflix Mail</span></div>
-    <div><h1>管理员后台</h1><p style="margin-top:12px">临时邮件访问与分享管理。</p></div>
-  </div>
-  <div class="auth-card">
-    <div class="card-title"><p class="page-kicker">Admin Portal</p><h1>管理员登录</h1><p class="muted">仅授权管理员可访问邮件中心。</p></div>
-    <form id="login-form">
-      <label>用户名</label><input name="username" autocomplete="username" placeholder="请输入用户名" required>
-      <label>密码</label><input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
-      <div class="form-actions"><button type="submit">登录后台</button><span id="login-message" class="muted"></span></div>
-    </form>
-  </div>
-</section>`;
-}
-__name(loginSection, "loginSection");
-function navItem(section, current, href, icon, label) {
-  const activeClass = section === current ? " active" : "";
-  return `<a class="nav-item${activeClass}" href="${href}">${icon}<span>${label}</span></a>`;
-}
-__name(navItem, "navItem");
-function moduleContent(section) {
-  if (section === "rules") return rulesSection();
-  if (section === "share") return shareSection();
-  return mailSection();
-}
-__name(moduleContent, "moduleContent");
-function mailSection() {
-  return String.raw`<section id="mail-center">
-  <div class="page-title-row"><div><p class="page-kicker">Mail Center</p><h1>邮件中心</h1><p class="muted">搜索、查看验证码候选与原始邮件内容。</p></div></div>
-  <div class="metric-grid" aria-label="邮件统计">
-    <div class="metric-card"><span class="soft-icon">${MAIL_ICON}</span><div><span class="muted">当前列表</span><span id="metric-total" class="metric-value">0</span></div></div>
-    <div class="metric-card"><span class="soft-icon success">${SHIELD_ICON}</span><div><span class="muted">验证码候选</span><span id="metric-codes" class="metric-value">0</span></div></div>
-    <div class="metric-card"><span class="soft-icon warning">${RULE_ICON}</span><div><span class="muted">最近收件</span><span id="metric-recent" class="metric-value">--</span></div></div>
-  </div>
-  <form id="search-form" class="search-panel">
-    <div><label>搜索</label><input name="q" placeholder="主题、发件人、收件人"></div>
-    <button type="submit">查询</button><button id="reload-emails" type="button" class="secondary">刷新</button>
-  </form>
-  <div id="emails-table" style="margin-top:18px"></div>
-</section>
-<section id="email-detail" class="hidden">
-  <div class="card-header"><div class="card-title"><p class="page-kicker">Message Detail</p><h2>邮件详情</h2></div></div>
-  <div id="email-detail-content"></div>
-</section>`;
-}
-__name(mailSection, "mailSection");
-function rulesSection() {
-  return String.raw`<section id="rule-center">
-  <div class="card-header"><div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">独立维护访客可见邮件的匹配规则。</p></div></div>
-  <div class="grid">
-    <div class="span-4">${ruleForm()}</div>
-    <div class="span-8"><div id="rules-table"></div></div>
-  </div>
-</section>`;
-}
-__name(rulesSection, "rulesSection");
-function shareSection() {
-  return String.raw`<section id="share-center">
-  <div class="card-header"><div class="card-title"><p class="page-kicker">Share Links</p><h1>分享链接</h1><p class="muted">为访客生成临时访问链接，只返回最近 30 分钟命中邮件。</p></div></div>
-  <div class="grid">
-    <div class="span-4">${shareForm()}</div>
-    <div class="span-8"><pre id="new-link" class="hidden"></pre><div id="links-table"></div></div>
-  </div>
-</section>`;
-}
-__name(shareSection, "shareSection");
-function ruleForm() {
-  return String.raw`<form id="rule-form" class="card" style="padding:18px">
-  <label>规则名称</label><input name="name" placeholder="例如：登录验证码" required>
-  <label>关键词</label><input name="keyword" placeholder="请输入关键词" required>
-  <label>匹配字段</label>
-  <div class="chips">
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
-    <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
-  </div>
-  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option></select>
-  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
-  <div class="form-actions"><button type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
-</form>`;
-}
-__name(ruleForm, "ruleForm");
-function shareForm() {
-  return String.raw`<form id="link-form" class="card" style="padding:18px">
-  <label>链接名称</label><input name="name" placeholder="例如：临时访客">
-  <label>过期时间</label><input name="expiresAt" type="datetime-local">
-  <label>绑定规则</label><select id="share-rules" name="ruleIds" multiple size="7" required></select>
-  <div class="form-actions"><button type="submit">生成链接</button><span id="link-message" class="muted"></span></div>
-</form>`;
-}
-__name(shareForm, "shareForm");
-function adminScript(section) {
-  return ADMIN_SCRIPT.replace("__ADMIN_SECTION__", section);
-}
-__name(adminScript, "adminScript");
-var ADMIN_SCRIPT = String.raw`
-const state = { rules: [] };
-const currentPage = "__ADMIN_SECTION__";
-const loginSection = document.querySelector("#login-section");
-const appSection = document.querySelector("#app-section");
-const loginMessage = document.querySelector("#login-message");
-const adminName = document.querySelector("#admin-name");
-const logoutButton = document.querySelector("#logout");
-
+// src/views/mail-shared.ts
+var COMMON_MAIL_CLIENT_SCRIPT = String.raw`
 function escapeText(value) {
   return String(value ?? "").replace(/[&<>"']/g, (char) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
   }[char]));
 }
+function escapeAttribute(value) {
+  return escapeText(value).replace(new RegExp(String.fromCharCode(96), "g"), "&#096;");
+}
 function formatDate(value) { return value ? new Date(value).toLocaleString() : "--"; }
+function formatTime(value) { return value ? new Date(value).toLocaleTimeString() : "--"; }
 function optional(selector) { return document.querySelector(selector); }
 function on(selector, eventName, handler) {
   const element = optional(selector);
   if (element) element.addEventListener(eventName, handler);
 }
+function normalizeCodes(codes) {
+  if (Array.isArray(codes)) return codes.map((code) => typeof code === "string" ? code : code?.code).filter(Boolean);
+  if (typeof codes === "string") return codes.split(",").map((code) => code.trim()).filter(Boolean);
+  return [];
+}
+function renderCodeChips(codes) {
+  const items = normalizeCodes(codes);
+  return items.map((code) => '<span class="chip code"><span class="code-label">验证码</span>' + escapeText(code) + '</span>').join("");
+}
+function renderMetaPill(label, value) {
+  return '<span class="mail-meta-pill"><strong>' + escapeText(label) + ':</strong> ' + escapeText(value || "--") + '</span>';
+}
+function renderMailBodyFromContent(html, text, trusted) {
+  if (!html) return '<pre class="mail-body">' + escapeText(text || "暂无正文") + '</pre>';
+  const warning = trusted ? "" : '<div class="mail-risk"><strong>外部资源已拦截</strong><span>未检测到可信邮件签名/认证结果。为避免追踪或钓鱼风险，默认不加载外部图片和链接。</span><button type="button" class="secondary" data-load-remote-mail>仍然加载图片和链接</button></div>';
+  return warning + mailFrameHtml(html, trusted);
+}
+function mailFrameHtml(html, allowRemote) {
+  const sandbox = allowRemote ? ' sandbox="allow-popups allow-popups-to-escape-sandbox"' : ' sandbox=""';
+  return '<iframe class="mail-frame"' + sandbox + ' referrerpolicy="no-referrer" data-mail-html="' + escapeAttribute(html) + '" srcdoc="' + escapeAttribute(buildMailFrameDoc(html, allowRemote)) + '"></iframe>';
+}
+function buildMailFrameDoc(html, allowRemote) {
+  const imgSrc = allowRemote ? "data: blob: cid: https:" : "data: blob: cid:";
+  return "<!doctype html><html><head><meta charset=\"utf-8\">" +
+    "<meta name=\"referrer\" content=\"no-referrer\">" +
+    "<meta http-equiv=\"Content-Security-Policy\" content=\"default-src 'none'; img-src " + imgSrc + "; style-src 'unsafe-inline'; font-src data:; script-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none';\">" +
+    "<base target=\"_blank\"><style>html,body{margin:0;padding:0;background:#fff;color:#111827;font-family:Arial,Helvetica,sans-serif;}body{padding:20px;}table{max-width:100%;}img{max-width:100%;height:auto;}</style>" +
+    "</head><body>" + sanitizeEmailHtml(html, allowRemote) + "</body></html>";
+}
+function sanitizeEmailHtml(html, allowRemote) {
+  let output = String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<object[\s\S]*?<\/object>/gi, "")
+    .replace(/<embed[\s\S]*?>/gi, "")
+    .replace(/<form[\s\S]*?<\/form>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  if (!allowRemote) {
+    output = output
+      .replace(/\s(src|srcset)\s*=\s*("https?:[^\"]*"|'https?:[^']*'|https?:[^\s>]+)/gi, "")
+      .replace(/\shref\s*=\s*("https?:[^\"]*"|'https?:[^']*'|https?:[^\s>]+)/gi, ' href="#"');
+  }
+  return output;
+}
+function bindRemoteMailButtons(rootSelector) {
+  const root = rootSelector ? optional(rootSelector) : document;
+  if (!root) return;
+  root.querySelectorAll("[data-load-remote-mail]").forEach((button) => {
+    if (button.dataset.boundRemote === "1") return;
+    button.dataset.boundRemote = "1";
+    button.addEventListener("click", () => {
+      const scope = button.closest(".mail-detail-panel") || root;
+      const frame = scope.querySelector(".mail-frame[data-mail-html]");
+      if (!frame) return;
+      const html = frame.getAttribute("data-mail-html") || "";
+      frame.setAttribute("sandbox", "allow-popups allow-popups-to-escape-sandbox");
+      frame.setAttribute("srcdoc", buildMailFrameDoc(html, true));
+      button.closest(".mail-risk")?.remove();
+    });
+  });
+}
+function requestMailFullscreen(selector) {
+  const element = optional(selector);
+  if (element?.requestFullscreen) element.requestFullscreen().catch(() => null);
+}
+function togglePlainPanel(panelSelector, button) {
+  const panel = optional(panelSelector);
+  if (!panel) return;
+  const hidden = panel.classList.toggle("hidden");
+  if (button) button.textContent = hidden ? "显示纯文本邮件" : "隐藏纯文本邮件";
+}
+function hasTrustedAuthentication(headersText) {
+  const text = authenticationHeaderText(headersText).toLowerCase();
+  return /\bdkim\s*=\s*pass\b/.test(text) || /\bdmarc\s*=\s*pass\b/.test(text) || /\barc\s*=\s*pass\b/.test(text);
+}
+function authenticationHeaderText(headersText) {
+  try {
+    const headers = JSON.parse(headersText || "[]");
+    if (!Array.isArray(headers)) return "";
+    return headers
+      .filter((header) => /^(authentication-results|arc-authentication-results)$/i.test(header.key || header.originalKey || ""))
+      .map((header) => String(header.value || ""))
+      .join("\n");
+  } catch {
+    return headersText || "";
+  }
+}
+function htmlToText(html) {
+  return String(html || "")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p\s*>|<\/div\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#039;|&apos;/gi, "'");
+}
+function cleanEmailBody(value) {
+  const lines = String(value || "")
+    .replace(/[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/[ \t]+$/g, ""));
+  const output = [];
+  let skippingForwardHeader = false;
+  for (const line of lines) {
+    if (/^-+\s*Forwarded message\s*-+$/i.test(line.trim())) { skippingForwardHeader = true; continue; }
+    if (skippingForwardHeader && line.trim() === "") { skippingForwardHeader = false; continue; }
+    if (skippingForwardHeader && /^(发件人|寄件者|收件人|主题|日期|from|to|subject|date)[:：]/i.test(line.trim())) continue;
+    skippingForwardHeader = false;
+    if (line.trim() === "" && output.at(-1)?.trim() === "") continue;
+    output.push(line);
+  }
+  return output.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+`;
+
+// src/views/admin-client.ts
+function adminScript(section) {
+  return COMMON_MAIL_CLIENT_SCRIPT + ADMIN_SCRIPT.replace("__ADMIN_SECTION__", section);
+}
+__name(adminScript, "adminScript");
+var ADMIN_SCRIPT = String.raw`
+const state = { rules: [], links: [], emails: [], selectedEmailId: null, currentQuery: "" };
+const currentPage = "__ADMIN_SECTION__";
+const authLoading = document.querySelector("#auth-loading");
+const loginSection = document.querySelector("#login-section");
+const appSection = document.querySelector("#app-section");
+const loginMessage = document.querySelector("#login-message");
+const adminName = document.querySelector("#admin-name");
+const logoutButton = document.querySelector("#logout");
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
@@ -7397,12 +8073,14 @@ async function api(path, options = {}) {
   return data;
 }
 function showApp(admin) {
+  authLoading.classList.add("hidden");
   loginSection.classList.add("hidden");
   appSection.classList.remove("hidden");
   logoutButton.classList.remove("hidden");
   adminName.textContent = admin.username;
 }
 function showLogin() {
+  authLoading.classList.add("hidden");
   loginSection.classList.remove("hidden");
   appSection.classList.add("hidden");
   logoutButton.classList.add("hidden");
@@ -7432,12 +8110,19 @@ on("#search-form", "submit", async (event) => {
   await loadEmails(new FormData(event.currentTarget).get("q"));
 });
 on("#reload-emails", "click", () => loadEmails());
+on("#open-rule-form", "click", () => openRuleForm());
+on("#open-link-form", "click", () => openLinkForm());
+on("#upgrade-database", "click", () => upgradeDatabase());
 on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
+document.querySelectorAll("[data-close-dialog]").forEach((button) => {
+  button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
+});
 
 async function loadCurrentPage() {
   if (currentPage === "rules") await loadRules();
   if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
+  if (currentPage === "database") await loadDatabaseStatus();
   if (currentPage === "mail") await loadEmails();
 }
 
@@ -7445,12 +8130,21 @@ async function submitRuleForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = new FormData(form);
-  const body = { name: data.get("name"), keyword: data.get("keyword"), fields: data.getAll("fields"), matchMode: data.get("matchMode"), caseSensitive: data.has("caseSensitive") };
+  const id = String(data.get("id") || "");
+  const body = {
+    name: data.get("name"),
+    keyword: data.get("keyword"),
+    fields: data.getAll("fields"),
+    matchMode: data.get("matchMode"),
+    caseSensitive: data.has("caseSensitive"),
+    enabled: data.has("enabled")
+  };
   try {
-    await api("/api/admin/rules", { method: "POST", body: JSON.stringify(body) });
-    form.reset();
-    form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
-    optional("#rule-message").textContent = "已保存";
+    const path = id ? "/api/admin/rules/" + encodeURIComponent(id) : "/api/admin/rules";
+    await api(path, { method: id ? "PATCH" : "POST", body: JSON.stringify(body) });
+    optional("#rule-message").textContent = id ? "已更新" : "已保存";
+    closeDialog("rule-dialog");
+    resetRuleForm();
     await loadRules();
   } catch (error) {
     optional("#rule-message").textContent = error.message;
@@ -7460,14 +8154,25 @@ async function submitLinkForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = new FormData(form);
+  const id = String(data.get("id") || "");
   const expiresRaw = data.get("expiresAt");
-  const body = { name: data.get("name"), expiresAt: expiresRaw ? new Date(expiresRaw).toISOString() : null, ruleIds: data.getAll("ruleIds").map(Number) };
+  const body = {
+    name: data.get("name"),
+    expiresAt: expiresRaw ? new Date(expiresRaw).toISOString() : null,
+    ruleIds: data.getAll("ruleIds").map(Number),
+    status: data.get("status")
+  };
   try {
-    const result = await api("/api/admin/share-links", { method: "POST", body: JSON.stringify(body) });
-    const output = optional("#new-link");
-    output.classList.remove("hidden");
-    output.textContent = result.url;
-    optional("#link-message").textContent = "已生成";
+    if (id) {
+      await api("/api/admin/share-links/" + encodeURIComponent(id), { method: "PATCH", body: JSON.stringify(body) });
+      optional("#link-message").textContent = "已更新";
+    } else {
+      const result = await api("/api/admin/share-links", { method: "POST", body: JSON.stringify(body) });
+      renderGeneratedLink(result.url);
+      optional("#link-message").textContent = "已生成";
+    }
+    closeDialog("link-dialog");
+    resetLinkForm();
     await loadLinks();
   } catch (error) {
     optional("#link-message").textContent = error.message;
@@ -7477,72 +8182,289 @@ async function submitLinkForm(event) {
 function updateMetrics(emails) {
   const total = optional("#metric-total");
   if (!total) return;
-  const codeCount = emails.reduce((sum, email) => sum + String(email.codes || "").split(/[\s,]+/).filter(Boolean).length, 0);
   total.textContent = String(emails.length);
-  optional("#metric-codes").textContent = String(codeCount);
-  optional("#metric-recent").textContent = emails[0] ? new Date(emails[0].received_at).toLocaleTimeString() : "--";
+  optional("#metric-codes").textContent = String(emails.filter((email) => normalizeCodes(email.codes).length > 0).length);
+  optional("#metric-recent").textContent = emails[0] ? formatTime(emails[0].received_at) : "--";
 }
-async function loadEmails(q = "") {
-  const data = await api("/api/admin/emails?q=" + encodeURIComponent(q || ""));
-  updateMetrics(data.emails);
-  const rows = data.emails.map((email) => '<tr data-id="' + email.id + '">' +
-    '<td><span class="badge muted-badge">#' + email.id + '</span></td>' +
-    '<td><strong>' + escapeText(email.subject || "(无主题)") + '</strong><div class="muted">' + escapeText(email.codes || "") + '</div></td>' +
-    '<td>' + escapeText(email.from_address || email.envelope_from) + '</td>' +
-    '<td>' + escapeText(email.envelope_to) + '</td>' +
-    '<td>' + escapeText(formatDate(email.received_at)) + '</td></tr>').join("");
-  optional("#emails-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>主题</th><th>From</th><th>To</th><th>时间</th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5"><div class="empty-state">暂无邮件</div></td></tr>') + '</tbody></table></div>';
-  document.querySelectorAll("tr[data-id]").forEach((row) => row.addEventListener("click", () => loadEmailDetail(row.dataset.id)));
+async function loadEmails(q = state.currentQuery) {
+  state.currentQuery = String(q || "");
+  const data = await api("/api/admin/emails?q=" + encodeURIComponent(state.currentQuery));
+  state.emails = data.emails;
+  updateMetrics(state.emails);
+  renderAdminEmailList();
+  const nextId = resolveAdminSelectedEmailId();
+  if (nextId) await loadEmailDetail(nextId);
+  else renderAdminEmptyDetail("暂无邮件");
+}
+function resolveAdminSelectedEmailId() {
+  if (state.emails.length === 0) return null;
+  const selected = state.emails.find((email) => String(email.id) === String(state.selectedEmailId));
+  return selected ? selected.id : state.emails[0].id;
+}
+function renderAdminEmailList() {
+  const list = optional("#emails-table");
+  if (!list) return;
+  list.innerHTML = state.emails.map(renderAdminEmailListItem).join("") || '<div class="empty-state">暂无邮件</div>';
+  list.querySelectorAll("[data-id]").forEach((item) => item.addEventListener("click", () => loadEmailDetail(item.dataset.id)));
+}
+function renderAdminEmailListItem(email) {
+  const selected = String(email.id) === String(state.selectedEmailId) ? " selected" : "";
+  const sender = email.from_address || email.envelope_from || "--";
+  return '<button type="button" class="mail-list-item' + selected + '" data-id="' + email.id + '">' +
+    '<strong>' + escapeText(email.subject || "(无主题)") + '</strong>' +
+    '<div class="mail-list-tags">' + renderMetaPill("ID", email.id) + renderMetaPill("时间", formatDate(email.received_at)) + '</div>' +
+    '<div class="mail-list-tags">' + renderMetaPill("FROM", sender) + '</div>' +
+    '<div class="mail-list-tags">' + renderMetaPill("TO", email.envelope_to) + '</div>' +
+  '</button>';
 }
 async function loadEmailDetail(id) {
   const data = await api("/api/admin/emails/" + encodeURIComponent(id));
   const email = data.email;
-  const codes = email.codes.map((code) => '<span class="chip code">' + escapeText(code.code) + '</span>').join("");
+  const body = cleanEmailBody(email.content.text || htmlToText(email.content.html) || "");
+  state.selectedEmailId = String(email.id);
+  renderAdminEmailList();
   optional("#email-detail").classList.remove("hidden");
-  optional("#email-detail-content").innerHTML = '<div class="detail-grid"><div class="chips">' + (codes || '<span class="badge muted-badge">无验证码</span>') + '</div>' +
-    '<div class="detail-row"><strong>发件地址</strong><span>' + escapeText(email.from_address || email.envelope_from) + '</span></div>' +
-    '<div class="detail-row"><strong>收件地址</strong><span>' + escapeText(email.envelope_to) + '</span></div>' +
-    '<h3>Text</h3><pre>' + escapeText(email.content.text || "") + '</pre><h3>HTML</h3><pre>' + escapeText(email.content.html || "") +
-    '</pre><h3>Headers</h3><pre>' + escapeText(email.content.headers || "") + '</pre><h3>Attachments</h3><pre>' + escapeText(JSON.stringify(email.attachments, null, 2)) + '</pre></div>';
+  optional("#email-detail-content").innerHTML = renderAdminEmailDetail(email, body);
+  bindAdminDetailActions();
+}
+function renderAdminEmailDetail(email, body) {
+  const codes = renderCodeChips(email.codes) || '<span class="badge muted-badge">无验证码</span>';
+  const trusted = hasTrustedAuthentication(email.content.headers || "");
+  const attachmentCount = Number(email.attachment_count || email.attachments?.length || 0);
+  const attachmentTag = attachmentCount > 0 ? '<span class="badge muted-badge">附件 ' + attachmentCount + '</span>' : "";
+  const index = state.emails.findIndex((item) => String(item.id) === String(email.id));
+  const prevDisabled = index <= 0 ? " disabled" : "";
+  const nextDisabled = index < 0 || index >= state.emails.length - 1 ? " disabled" : "";
+  return '<div class="mail-detail-view"><div class="mail-detail-nav">' +
+    '<button type="button" class="secondary" data-mail-prev' + prevDisabled + '>‹ 上一封</button>' +
+    '<button type="button" class="secondary" data-mail-next' + nextDisabled + '>下一封 ›</button></div>' +
+    '<div class="mail-detail-header"><h2>' + escapeText(email.subject || "(无主题)") + '</h2>' +
+    '<div class="mail-meta-row">' + renderMetaPill("ID", email.id) + renderMetaPill("时间", formatDate(email.received_at)) +
+    renderMetaPill("FROM", email.from_address || email.envelope_from) + renderMetaPill("TO", email.envelope_to) + '</div>' +
+    '<div class="mail-action-row">' + attachmentTag + '<button type="button" class="secondary" data-toggle-plain>显示纯文本邮件</button>' +
+    '<button type="button" class="secondary" data-mail-fullscreen>全屏</button></div></div>' +
+    '<div class="chips">' + codes + '</div><div class="mail-preview-stage">' +
+    renderMailBodyFromContent(email.content.html || "", body, trusted) + '</div>' +
+    '<pre class="mail-plain-panel hidden">' + escapeText(body || "暂无正文") + '</pre>' +
+    '<details class="advanced-info"><summary>高级信息</summary><h3>HTML 原文</h3><pre>' + escapeText(email.content.html || "") +
+    '</pre><h3>Headers</h3><pre>' + escapeText(email.content.headers || "") + '</pre><h3>Attachments</h3><pre>' +
+    escapeText(JSON.stringify(email.attachments, null, 2)) + '</pre></details></div>';
+}
+function renderAdminEmptyDetail(message) {
+  optional("#email-detail").classList.remove("hidden");
+  optional("#email-detail-content").innerHTML = '<div class="mail-empty-detail empty-state">' + escapeText(message) + '</div>';
+}
+function bindAdminDetailActions() {
+  on("[data-mail-prev]", "click", () => navigateAdminEmail(-1));
+  on("[data-mail-next]", "click", () => navigateAdminEmail(1));
+  on("[data-mail-fullscreen]", "click", () => requestMailFullscreen(".mail-preview-stage"));
+  on("[data-toggle-plain]", "click", (event) => togglePlainPanel(".mail-plain-panel", event.currentTarget));
+  bindRemoteMailButtons("#email-detail");
+}
+function navigateAdminEmail(delta) {
+  const index = state.emails.findIndex((email) => String(email.id) === String(state.selectedEmailId));
+  const target = state.emails[index + delta];
+  if (target) loadEmailDetail(target.id);
 }
 
 async function loadRules() {
   const data = await api("/api/admin/rules");
   state.rules = data.rules;
   renderRulesTable();
-  const shareRules = optional("#share-rules");
-  if (shareRules) shareRules.innerHTML = state.rules.filter((rule) => rule.enabled).map((rule) => '<option value="' + rule.id + '">' + escapeText(rule.name) + '</option>').join("");
+  populateShareRules();
 }
 function renderRulesTable() {
-  const table = optional("#rules-table");
-  if (!table) return;
-  const rows = state.rules.map((rule) => '<tr><td><span class="badge muted-badge">#' + rule.id + '</span></td>' +
-    '<td><strong>' + escapeText(rule.name) + '</strong><div class="muted">' + escapeText(rule.keyword) + '</div></td>' +
-    '<td>' + escapeText(rule.fields.join(", ")) + '</td><td><span class="badge ' + (rule.enabled ? 'success' : 'muted-badge') + '">' + (rule.enabled ? "启用" : "停用") + '</span></td>' +
-    '<td><button class="secondary" data-disable-rule="' + rule.id + '">停用</button></td></tr>').join("");
-  table.innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>规则</th><th>字段</th><th>状态</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5"><div class="empty-state">暂无规则</div></td></tr>') + '</tbody></table></div>';
-  document.querySelectorAll("[data-disable-rule]").forEach((button) => button.addEventListener("click", () => disableRule(Number(button.dataset.disableRule))));
+  const list = optional("#rules-table");
+  if (!list) return;
+  list.innerHTML = state.rules.map(renderRuleItem).join("") || '<div class="empty-state">暂无规则</div>';
+  list.querySelectorAll("[data-edit-rule]").forEach((button) => button.addEventListener("click", () => editRule(Number(button.dataset.editRule))));
+  list.querySelectorAll("[data-delete-rule]").forEach((button) => button.addEventListener("click", () => deleteRuleItem(Number(button.dataset.deleteRule))));
 }
-async function disableRule(id) {
-  const rule = state.rules.find((item) => item.id === id);
-  if (!rule) return;
-  await api("/api/admin/rules/" + id, { method: "PATCH", body: JSON.stringify({ ...rule, enabled: false }) });
-  await loadRules();
+function renderRuleItem(rule) {
+  const status = rule.enabled ? '<span class="badge success">启用</span>' : '<span class="badge muted-badge">停用</span>';
+  const mode = rule.matchMode === "exact" ? "完全相等" : "包含";
+  return '<article class="list-item-card">' +
+    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + status + '</div>' +
+    '<div class="item-meta">' + renderMetaPill("关键词", rule.keyword) + renderMetaPill("字段", rule.fields.join(", ")) + renderMetaPill("方式", mode) +
+    renderMetaPill("大小写", rule.caseSensitive ? "区分" : "不区分") + '</div></div>' +
+    '<div class="item-actions"><button type="button" class="secondary" data-edit-rule="' + rule.id + '">编辑</button>' +
+    '<button type="button" class="danger" data-delete-rule="' + rule.id + '">删除</button></div></article>';
+}
+function openRuleForm() {
+  resetRuleForm();
+  showDialog("rule-dialog");
+}
+function resetRuleForm() {
+  const form = optional("#rule-form");
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = "";
+  form.elements.enabled.checked = true;
+  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
+  optional("#rule-form-title").textContent = "添加规则";
+  optional("#rule-submit").textContent = "保存规则";
+  optional("#rule-message").textContent = "";
+}
+function editRule(id) {
+  const rule = state.rules.find((item) => Number(item.id) === id);
+  const form = optional("#rule-form");
+  if (!rule || !form) return;
+  resetRuleForm();
+  form.elements.id.value = rule.id;
+  form.elements.name.value = rule.name || "";
+  form.elements.keyword.value = rule.keyword || "";
+  form.elements.matchMode.value = rule.matchMode || "contains";
+  form.elements.caseSensitive.checked = Boolean(rule.caseSensitive);
+  form.elements.enabled.checked = Boolean(rule.enabled);
+  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = rule.fields.includes(input.value); });
+  optional("#rule-form-title").textContent = "编辑规则";
+  optional("#rule-submit").textContent = "保存修改";
+  showDialog("rule-dialog");
+}
+async function deleteRuleItem(id) {
+  const rule = state.rules.find((item) => Number(item.id) === id);
+  if (!rule || !confirm("确认删除规则“" + rule.name + "”？关联分享链接会同步失去该规则。")) return;
+  await api("/api/admin/rules/" + encodeURIComponent(id), { method: "DELETE" });
+  await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
 async function loadLinks() {
   const data = await api("/api/admin/share-links");
-  const rows = data.links.map((link) => '<tr><td><span class="badge muted-badge">#' + link.id + '</span></td>' +
-    '<td><strong>' + escapeText(link.name || "未命名") + '</strong><div class="muted">规则：' + escapeText(link.ruleIds.join(", ")) + '</div></td>' +
-    '<td><span class="badge ' + (link.status === "active" ? 'success' : 'muted-badge') + '">' + escapeText(link.status) + '</span></td>' +
-    '<td>' + escapeText(link.expires_at || "长期") + '</td><td><button class="danger" data-disable-link="' + link.id + '">停用</button></td></tr>').join("");
-  optional("#links-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>过期</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5"><div class="empty-state">暂无链接</div></td></tr>') + '</tbody></table></div>';
-  document.querySelectorAll("[data-disable-link]").forEach((button) => button.addEventListener("click", async () => {
-    await api("/api/admin/share-links/" + button.dataset.disableLink, { method: "PATCH", body: JSON.stringify({ status: "disabled" }) });
-    await loadLinks();
-  }));
+  state.links = data.links;
+  renderLinksTable();
+}
+function renderLinksTable() {
+  const list = optional("#links-table");
+  if (!list) return;
+  list.innerHTML = state.links.map(renderLinkItem).join("") || '<div class="empty-state">暂无链接</div>';
+  list.querySelectorAll("[data-edit-link]").forEach((button) => button.addEventListener("click", () => editLink(Number(button.dataset.editLink))));
+  list.querySelectorAll("[data-copy-link]").forEach((button) => button.addEventListener("click", () => copyShareLink(Number(button.dataset.copyLink))));
+  list.querySelectorAll("[data-delete-link]").forEach((button) => button.addEventListener("click", () => deleteLinkItem(Number(button.dataset.deleteLink))));
+}
+function renderLinkItem(link) {
+  const status = link.status === "active" ? '<span class="badge success">active</span>' : '<span class="badge muted-badge">disabled</span>';
+  const copyHint = link.url ? "复制链接" : "旧链接缺少可恢复 token，无法重新获取";
+  return '<article class="list-item-card">' +
+    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(link.name || "未命名") + '</strong><span class="badge muted-badge">#' + link.id + '</span>' + status + '</div>' +
+    '<div class="item-meta">' + renderMetaPill("规则", link.ruleIds.join(", ") || "无") + renderMetaPill("过期", formatDate(link.expires_at)) +
+    renderMetaPill("窗口", String(link.window_minutes || 30) + " 分钟") + renderMetaPill("最近访问", formatDate(link.last_accessed_at)) + '</div></div>' +
+    '<div class="item-actions"><button type="button" class="secondary" data-edit-link="' + link.id + '">编辑</button>' +
+    '<button type="button" class="secondary" title="' + escapeAttribute(copyHint) + '" data-copy-link="' + link.id + '">复制</button>' +
+    '<button type="button" class="danger" data-delete-link="' + link.id + '">删除</button></div></article>';
+}
+function openLinkForm() {
+  resetLinkForm();
+  populateShareRules();
+  showDialog("link-dialog");
+}
+function resetLinkForm() {
+  const form = optional("#link-form");
+  if (!form) return;
+  form.reset();
+  form.elements.id.value = "";
+  form.elements.status.value = "active";
+  populateShareRules();
+  optional("#link-form-title").textContent = "添加分享链接";
+  optional("#link-submit").textContent = "生成链接";
+  optional("#link-message").textContent = "";
+}
+function editLink(id) {
+  const link = state.links.find((item) => Number(item.id) === id);
+  const form = optional("#link-form");
+  if (!link || !form) return;
+  resetLinkForm();
+  form.elements.id.value = link.id;
+  form.elements.name.value = link.name || "";
+  form.elements.expiresAt.value = toDatetimeLocal(link.expires_at);
+  form.elements.status.value = link.status || "active";
+  populateShareRules(link.ruleIds);
+  optional("#link-form-title").textContent = "编辑分享链接";
+  optional("#link-submit").textContent = "保存修改";
+  showDialog("link-dialog");
+}
+async function copyShareLink(id) {
+  const link = state.links.find((item) => Number(item.id) === id);
+  if (!link) return;
+  if (!link.url) {
+    optional("#link-message").textContent = "旧链接缺少可恢复 token，无法重新获取。请重新生成链接。";
+    return;
+  }
+  await copyText(link.url);
+  optional("#link-message").textContent = "已复制链接";
+}
+async function deleteLinkItem(id) {
+  const link = state.links.find((item) => Number(item.id) === id);
+  if (!link || !confirm("确认删除分享链接“" + (link.name || "未命名") + "”？")) return;
+  await api("/api/admin/share-links/" + encodeURIComponent(id), { method: "DELETE" });
+  await loadLinks();
+}
+function populateShareRules(selectedIds = []) {
+  const select = optional("#share-rules");
+  if (!select) return;
+  const selected = new Set(selectedIds.map(String));
+  const rules = state.rules.filter((rule) => rule.enabled || selected.has(String(rule.id)));
+  select.innerHTML = rules.map((rule) => '<option value="' + rule.id + '"' + (selected.has(String(rule.id)) ? " selected" : "") + '>' +
+    escapeText(rule.name + (rule.enabled ? "" : "（停用）")) + '</option>').join("");
+}
+async function loadDatabaseStatus() {
+  const data = await api("/api/admin/database/status");
+  renderDatabaseStatus(data);
+}
+async function upgradeDatabase() {
+  const message = optional("#database-message");
+  if (message) message.textContent = "正在升级数据库...";
+  const data = await api("/api/admin/database/upgrade", { method: "POST", body: "{}" });
+  renderDatabaseStatus(data);
+  if (message) message.textContent = data.appliedMigrations.length ? "已升级：" + data.appliedMigrations.join(", ") : "数据库已是最新";
+}
+function renderDatabaseStatus(data) {
+  const target = optional("#database-status");
+  if (!target) return;
+  const rows = data.migrations.map((item) => '<tr><td><strong>' + escapeText(item.id) + '</strong><div class="muted">' +
+    escapeText(item.description) + '</div></td><td><span class="badge ' + (item.applied ? 'success' : 'muted-badge') + '">' +
+    (item.applied ? "已应用" : "待升级") + '</span></td><td>' + escapeText(formatDate(item.appliedAt)) + '</td></tr>').join("");
+  target.innerHTML = '<div class="table-wrap"><table><thead><tr><th>迁移</th><th>状态</th><th>应用时间</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+}
+function showDialog(id) {
+  const dialog = optional("#" + id);
+  if (!dialog) return;
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.classList.remove("hidden");
+}
+function closeDialog(id) {
+  const dialog = optional("#" + id);
+  if (!dialog) return;
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.classList.add("hidden");
+}
+function toDatetimeLocal(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+}
+function renderGeneratedLink(url) {
+  const output = optional("#new-link");
+  if (!output) return;
+  output.classList.remove("hidden");
+  output.innerHTML = '<span><strong>新链接：</strong>' + escapeText(url) + '</span><button type="button" class="secondary" data-copy-new-link>复制</button>';
+  on("[data-copy-new-link]", "click", async () => {
+    await copyText(url);
+    optional("#link-message").textContent = "已复制链接";
+  });
+}
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
 }
 
 (async function init() {
@@ -7554,6 +8476,185 @@ async function loadLinks() {
     showLogin();
   }
 })();`;
+
+// src/views/admin.ts
+function adminPage(section = "mail") {
+  return page("\u7BA1\u7406\u5458\u540E\u53F0", adminBody(section), adminScript(section));
+}
+__name(adminPage, "adminPage");
+var MAIL_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
+var SHIELD_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="m9 12 2 2 4-5" stroke-width="2"/></svg>`;
+var LINK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" stroke-width="2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" stroke-width="2"/></svg>`;
+var RULE_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M7 12h10M10 19h4" stroke-width="2" stroke-linecap="round"/></svg>`;
+var DB_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="5" rx="7" ry="3" stroke-width="2"/><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" stroke-width="2"/><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" stroke-width="2"/></svg>`;
+var TITLES = {
+  mail: "\u90AE\u4EF6\u4E2D\u5FC3",
+  rules: "\u89C4\u5219\u7BA1\u7406",
+  share: "\u5206\u4EAB\u94FE\u63A5",
+  database: "\u6570\u636E\u5E93\u7BA1\u7406"
+};
+function adminBody(section) {
+  return String.raw`
+${authLoading()}
+${loginSection()}
+<div id="app-section" class="app-shell hidden">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>邮件管家</span></div>
+    <nav class="sidebar-nav" aria-label="后台导航">
+      ${navItem("mail", section, "/admin", MAIL_ICON, "\u90AE\u4EF6\u4E2D\u5FC3")}
+      ${navItem("rules", section, "/admin/rules", RULE_ICON, "\u89C4\u5219\u7BA1\u7406")}
+      ${navItem("share", section, "/admin/share-links", LINK_ICON, "\u5206\u4EAB\u94FE\u63A5")}
+      ${navItem("database", section, "/admin/database", DB_ICON, "\u6570\u636E\u5E93\u7BA1\u7406")}
+    </nav>
+    <div class="sidebar-footer">
+      <div class="inline-status"><span class="status-dot"></span><span>系统运行正常</span></div>
+    </div>
+  </aside>
+  <div class="content-shell">
+    <header class="topbar">
+      <div><p class="page-kicker">Netflix Mail Console</p><h2>${TITLES[section]}</h2></div>
+      <div class="toolbar">
+        <span id="admin-name" class="badge muted-badge"></span>
+        <button id="logout" class="secondary hidden" type="button">退出登录</button>
+      </div>
+    </header>
+    <main class="dashboard-main">${moduleContent(section)}</main>
+  </div>
+</div>`;
+}
+__name(adminBody, "adminBody");
+function authLoading() {
+  return String.raw`<div id="auth-loading" class="auth-loading">
+  <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>Netflix Mail</span></div>
+  <div class="inline-status"><span class="status-dot"></span><span>正在确认登录状态...</span></div>
+</div>`;
+}
+__name(authLoading, "authLoading");
+function loginSection() {
+  return String.raw`<section id="login-section" class="hero-auth hidden">
+  <div class="hero-copy compact-hero">
+    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>Netflix Mail</span></div>
+    <div><h1>管理员后台</h1><p style="margin-top:12px">临时邮件访问与分享管理。</p></div>
+  </div>
+  <div class="auth-card">
+    <div class="card-title"><p class="page-kicker">Admin Portal</p><h1>管理员登录</h1><p class="muted">仅授权管理员可访问邮件中心。</p></div>
+    <form id="login-form">
+      <label>用户名</label><input name="username" autocomplete="username" placeholder="请输入用户名" required>
+      <label>密码</label><input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+      <div class="form-actions"><button type="submit">登录后台</button><span id="login-message" class="muted"></span></div>
+    </form>
+  </div>
+</section>`;
+}
+__name(loginSection, "loginSection");
+function navItem(section, current, href, icon, label) {
+  const activeClass = section === current ? " active" : "";
+  return `<a class="nav-item${activeClass}" href="${href}">${icon}<span>${label}</span></a>`;
+}
+__name(navItem, "navItem");
+function moduleContent(section) {
+  if (section === "rules") return rulesSection();
+  if (section === "share") return shareSection();
+  if (section === "database") return databaseSection();
+  return mailSection();
+}
+__name(moduleContent, "moduleContent");
+function mailSection() {
+  return String.raw`<section id="mail-center" class="mail-viewer-shell admin-mail-viewer">
+  <form id="search-form" class="mail-viewer-topbar">
+    <input name="q" aria-label="搜索邮件" placeholder="留空查询所有地址；或输入主题、发件人、收件人">
+    <button type="submit">查询</button>
+  </form>
+  <div class="mail-viewer-controls">
+    <button id="reload-emails" type="button" class="secondary">刷新</button>
+    <span class="mail-control-chip">当前列表 <strong id="metric-total">0</strong></span>
+    <span class="mail-control-chip">命中邮件 <strong id="metric-codes">0</strong></span>
+    <span class="mail-control-chip">最近收件 <strong id="metric-recent">--</strong></span>
+  </div>
+  <div class="mail-viewer-grid">
+    <aside class="mail-list-panel" aria-label="邮件列表">
+      <div class="mail-list-title"><strong>邮件列表</strong><span>点击左侧邮件查看正文</span></div>
+      <div id="emails-table" class="mail-list"></div>
+    </aside>
+    <article id="email-detail" class="mail-detail-panel hidden" aria-live="polite">
+      <div id="email-detail-content"></div>
+    </article>
+  </div>
+</section>`;
+}
+__name(mailSection, "mailSection");
+function rulesSection() {
+  return String.raw`<section id="rule-center">
+  <div class="card-header">
+    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">独立维护访客可见邮件的匹配规则。</p></div>
+    <button id="open-rule-form" type="button">添加规则</button>
+  </div>
+  ${ruleForm()}
+  <div id="rules-table"></div>
+</section>`;
+}
+__name(rulesSection, "rulesSection");
+function shareSection() {
+  return String.raw`<section id="share-center">
+  <div class="card-header">
+    <div class="card-title"><p class="page-kicker">Share Links</p><h1>分享链接</h1><p class="muted">为访客生成临时访问链接，只返回最近 30 分钟命中邮件。</p></div>
+    <button id="open-link-form" type="button">添加分享链接</button>
+  </div>
+  ${shareForm()}
+  <div id="new-link" class="generated-link hidden"></div>
+  <div id="links-table"></div>
+</section>`;
+}
+__name(shareSection, "shareSection");
+function databaseSection() {
+  return String.raw`<section id="database-center">
+  <div class="card-header">
+    <div class="card-title"><p class="page-kicker">Database</p><h1>数据库管理</h1><p class="muted">更新 Worker JS 后，可在这里执行内置 D1 建表与升级语句。</p></div>
+    <button id="upgrade-database" type="button">升级数据库</button>
+  </div>
+  <div id="database-message" class="muted" style="margin-bottom:12px"></div>
+  <div id="database-status"></div>
+</section>`;
+}
+__name(databaseSection, "databaseSection");
+function ruleForm() {
+  return String.raw`<dialog id="rule-dialog" class="modal-card">
+<form id="rule-form" class="modal-form">
+  <input type="hidden" name="id">
+  <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
+  <label>规则名称</label><input name="name" placeholder="例如：登录验证码" required>
+  <label>关键词</label><input name="keyword" placeholder="请输入关键词" required>
+  <label>匹配字段</label>
+  <div class="chips">
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
+  </div>
+  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option></select>
+  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
+  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
+</form>
+</dialog>`;
+}
+__name(ruleForm, "ruleForm");
+function shareForm() {
+  return String.raw`<dialog id="link-dialog" class="modal-card">
+<form id="link-form" class="modal-form">
+  <input type="hidden" name="id">
+  <div class="modal-title-row"><h2 id="link-form-title">添加分享链接</h2><button type="button" class="secondary" data-close-dialog="link-dialog">关闭</button></div>
+  <label>链接名称</label><input name="name" placeholder="例如：临时访客">
+  <label>过期时间</label><input name="expiresAt" type="datetime-local">
+  <label>绑定规则</label><select id="share-rules" name="ruleIds" multiple size="7" required></select>
+  <label>状态</label><select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
+  <div class="form-actions"><button id="link-submit" type="submit">生成链接</button><span id="link-message" class="muted"></span></div>
+</form>
+</dialog>`;
+}
+__name(shareForm, "shareForm");
 
 // src/views/setup.ts
 function setupPage() {
@@ -7627,34 +8728,38 @@ function visitorPage(token) {
 __name(visitorPage, "visitorPage");
 var MAIL_ICON3 = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
 var SHIELD_ICON2 = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="m9 12 2 2 4-5" stroke-width="2"/></svg>`;
-var CLOCK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke-width="2"/><path d="M12 7v5l3 2" stroke-width="2" stroke-linecap="round"/></svg>`;
 var VISITOR_BODY = String.raw`
-<div class="visitor-shell">
-  <header class="visitor-header">
+<div class="visitor-shell mail-reader-page">
+  <header class="visitor-header mail-reader-header">
     <div>
       <div class="brand"><span class="brand-icon">${MAIL_ICON3}</span><span>访问代码</span></div>
-      <p class="muted" style="margin-top:8px">展示最近 30 分钟内的匹配邮件</p>
+      <p class="muted" style="margin-top:8px">展示最近 30 分钟内的匹配邮件，页面会自动刷新。</p>
     </div>
     <div class="toolbar">
       <span class="inline-status"><span class="status-dot"></span><span id="status">同步中</span></span>
       <button id="refresh" type="button" class="secondary">刷新</button>
     </div>
   </header>
-  <section class="visitor-hero">
-    <span class="soft-icon" style="width:72px;height:72px">${MAIL_ICON3}</span>
-    <div>
-      <h1>当前共 <span id="email-count" class="visitor-count">0</span> 封匹配邮件</h1>
-      <p class="muted">最近同步 <span id="last-sync">--</span>，页面会自动刷新。</p>
-    </div>
-    <span class="soft-icon success" style="width:86px;height:86px">${SHIELD_ICON2}</span>
-  </section>
   <main style="width:100%;margin:0">
-    <section>
-      <div class="card-header">
-        <div class="card-title"><p class="page-kicker">Matched Messages</p><h2>邮件列表</h2></div>
-        <span class="badge muted-badge">30 分钟窗口</span>
+    <section class="mail-viewer-shell visitor-mail-viewer">
+      <div class="mail-viewer-topbar">
+        <input id="visitor-filter" aria-label="过滤邮件" placeholder="过滤当前页">
+        <button id="visitor-clear-filter" type="button" class="secondary">清空</button>
       </div>
-      <div id="emails"></div>
+      <div class="mail-viewer-controls">
+        <span class="mail-control-chip">匹配邮件 <strong id="email-count" class="visitor-count">0</strong></span>
+        <span class="mail-control-chip">最近同步 <strong id="last-sync">--</strong></span>
+        <span class="mail-control-chip">30 分钟窗口</span>
+      </div>
+      <div class="mail-viewer-grid">
+        <aside class="mail-list-panel" aria-label="匹配邮件列表">
+          <div class="mail-list-title"><strong>邮件列表</strong><span>点击左侧邮件查看正文</span></div>
+          <div id="emails" class="mail-list"></div>
+        </aside>
+        <article id="visitor-email-detail" class="mail-detail-panel" aria-live="polite">
+          <div id="visitor-email-detail-content"></div>
+        </article>
+      </div>
     </section>
     <p class="muted" style="text-align:center;margin:18px 0">数据仅保留最近 30 分钟，自动刷新，保障访问隐私安全。</p>
   </main>
@@ -7664,19 +8769,24 @@ function safeScriptString(value) {
 }
 __name(safeScriptString, "safeScriptString");
 function visitorScript(token) {
-  return `
+  return COMMON_MAIL_CLIENT_SCRIPT + `
 const token = ${safeScriptString(token)};
+const visitorState = { emails: [], selectedEmailKey: null, filter: "" };
 const emails = document.querySelector("#emails");
 const statusEl = document.querySelector("#status");
 const countEl = document.querySelector("#email-count");
 const lastSyncEl = document.querySelector("#last-sync");
+const filterInput = document.querySelector("#visitor-filter");
 document.querySelector("#refresh").addEventListener("click", loadEmails);
-
-function escapeText(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-  }[char]));
-}
+filterInput.addEventListener("input", () => {
+  visitorState.filter = filterInput.value;
+  renderVisitorListAndDetail();
+});
+document.querySelector("#visitor-clear-filter").addEventListener("click", () => {
+  filterInput.value = "";
+  visitorState.filter = "";
+  renderVisitorListAndDetail();
+});
 
 async function loadEmails() {
   statusEl.textContent = "\u540C\u6B65\u4E2D";
@@ -7686,30 +8796,85 @@ async function loadEmails() {
     statusEl.textContent = data.error || "\u94FE\u63A5\u4E0D\u53EF\u7528";
     countEl.textContent = "0";
     emails.innerHTML = '<div class="empty-state">\u94FE\u63A5\u4E0D\u53EF\u7528\u6216\u5DF2\u8FC7\u671F</div>';
+    renderVisitorEmptyDetail("\u94FE\u63A5\u4E0D\u53EF\u7528\u6216\u5DF2\u8FC7\u671F");
     return;
   }
   const syncTime = new Date().toLocaleTimeString();
   statusEl.textContent = "\u5DF2\u540C\u6B65";
   lastSyncEl.textContent = syncTime;
+  visitorState.emails = data.emails.map((email, index) => ({
+    ...email,
+    viewKey: String(index) + "-" + String(email.receivedAt || "")
+  }));
   countEl.textContent = String(data.emails.length);
-  if (data.emails.length === 0) {
-    emails.innerHTML = '<div class="empty-state">\u6682\u65E0\u5339\u914D\u90AE\u4EF6</div>';
-    return;
-  }
-  emails.innerHTML = data.emails.map((email) => renderEmail(email)).join("");
+  renderVisitorListAndDetail();
 }
-
-function renderEmail(email) {
-  const codes = email.codes.map((code) => '<span class="chip code">\u9A8C\u8BC1\u7801 ' + escapeText(code) + '</span>').join("");
-  return '<article class="card email-card">' +
-    '<span class="soft-icon">${SHIELD_ICON2}</span>' +
-    '<div><h3>' + escapeText(email.subject || "(\u65E0\u4E3B\u9898)") + '</h3>' +
-    '<p class="muted">\u53D1\u4EF6\u4EBA\uFF1A' + escapeText(email.fromAddress || email.envelopeFrom) + '</p></div>' +
-    '<div><div class="chips">' + (codes || '<span class="badge muted-badge">\u65E0\u9A8C\u8BC1\u7801</span>') + '</div>' +
-    '<p class="email-body-preview">' + escapeText(email.body) + '</p></div>' +
-    '<div class="inline-status"><span class="soft-icon" style="width:34px;height:34px">${CLOCK_ICON}</span><span>\u63A5\u6536\u65F6\u95F4<br>' +
-    escapeText(new Date(email.receivedAt).toLocaleTimeString()) + '</span></div>' +
-  '</article>';
+function visitorVisibleEmails() {
+  const query = visitorState.filter.trim().toLowerCase();
+  if (!query) return visitorState.emails;
+  return visitorState.emails.filter((email) => [
+    email.subject, email.bodyText, email.body, normalizeCodes(email.codes).join(" ")
+  ].some((value) => String(value || "").toLowerCase().includes(query)));
+}
+function renderVisitorListAndDetail() {
+  const visible = visitorVisibleEmails();
+  emails.innerHTML = visible.map(renderVisitorListItem).join("") || '<div class="empty-state">\u6682\u65E0\u5339\u914D\u90AE\u4EF6</div>';
+  emails.querySelectorAll("[data-key]").forEach((item) => item.addEventListener("click", () => selectVisitorEmail(item.dataset.key)));
+  const selected = visible.find((email) => email.viewKey === visitorState.selectedEmailKey);
+  if (selected) selectVisitorEmail(selected.viewKey);
+  else if (visible[0]) selectVisitorEmail(visible[0].viewKey);
+  else renderVisitorEmptyDetail("\u6682\u65E0\u5339\u914D\u90AE\u4EF6");
+}
+function renderVisitorListItem(email) {
+  const selected = email.viewKey === visitorState.selectedEmailKey ? " selected" : "";
+  const truncated = email.contentTruncated ? '<span class="badge muted-badge">\u622A\u65AD</span>' : "";
+  return '<button type="button" class="mail-list-item' + selected + '" data-key="' + escapeAttribute(email.viewKey) + '">' +
+    '<strong>' + escapeText(email.subject || "(\u65E0\u4E3B\u9898)") + '</strong>' +
+    '<div class="mail-list-tags">' + renderMetaPill("\u65F6\u95F4", formatDate(email.receivedAt)) + truncated + '</div>' +
+  '</button>';
+}
+function selectVisitorEmail(key) {
+  const visible = visitorVisibleEmails();
+  const email = visible.find((item) => item.viewKey === key);
+  if (!email) return;
+  visitorState.selectedEmailKey = email.viewKey;
+  emails.querySelectorAll(".mail-list-item").forEach((item) => item.classList.toggle("selected", item.dataset.key === email.viewKey));
+  optional("#visitor-email-detail-content").innerHTML = renderVisitorEmailDetail(email, visible);
+  bindVisitorDetailActions();
+}
+function renderVisitorEmailDetail(email, visible) {
+  const body = cleanEmailBody(email.bodyText || email.body || htmlToText(email.bodyHtml) || "");
+  const codes = renderCodeChips(email.codes) || '<span class="badge muted-badge">\u65E0\u9A8C\u8BC1\u7801</span>';
+  const truncated = email.contentTruncated ? '<span class="badge muted-badge">\u5185\u5BB9\u5DF2\u622A\u65AD</span>' : "";
+  const index = visible.findIndex((item) => item.viewKey === email.viewKey);
+  const prevDisabled = index <= 0 ? " disabled" : "";
+  const nextDisabled = index < 0 || index >= visible.length - 1 ? " disabled" : "";
+  return '<div class="mail-detail-view"><div class="mail-detail-nav">' +
+    '<button type="button" class="secondary" data-visitor-prev' + prevDisabled + '>\u2039 \u4E0A\u4E00\u5C01</button>' +
+    '<button type="button" class="secondary" data-visitor-next' + nextDisabled + '>\u4E0B\u4E00\u5C01 \u203A</button></div>' +
+    '<div class="mail-detail-header"><h2>' + escapeText(email.subject || "(\u65E0\u4E3B\u9898)") + '</h2>' +
+    '<div class="mail-meta-row">' + renderMetaPill("\u65F6\u95F4", formatDate(email.receivedAt)) + '</div>' +
+    '<div class="mail-action-row">' + truncated + '<button type="button" class="secondary" data-toggle-visitor-plain>\u663E\u793A\u7EAF\u6587\u672C\u90AE\u4EF6</button>' +
+    '<button type="button" class="secondary" data-visitor-fullscreen>\u5168\u5C4F</button></div></div>' +
+    '<div class="chips">' + codes + '</div><div class="mail-preview-stage">' +
+    renderMailBodyFromContent(email.bodyHtml || "", body, Boolean(email.trustedAuthentication)) + '</div>' +
+    '<pre class="mail-plain-panel hidden">' + escapeText(body || "\u6682\u65E0\u6B63\u6587") + '</pre></div>';
+}
+function renderVisitorEmptyDetail(message) {
+  optional("#visitor-email-detail-content").innerHTML = '<div class="mail-empty-detail empty-state">' + escapeText(message) + '</div>';
+}
+function bindVisitorDetailActions() {
+  on("[data-visitor-prev]", "click", () => navigateVisitorEmail(-1));
+  on("[data-visitor-next]", "click", () => navigateVisitorEmail(1));
+  on("[data-visitor-fullscreen]", "click", () => requestMailFullscreen("#visitor-email-detail .mail-preview-stage"));
+  on("[data-toggle-visitor-plain]", "click", (event) => togglePlainPanel("#visitor-email-detail .mail-plain-panel", event.currentTarget));
+  bindRemoteMailButtons("#visitor-email-detail");
+}
+function navigateVisitorEmail(delta) {
+  const visible = visitorVisibleEmails();
+  const index = visible.findIndex((email) => email.viewKey === visitorState.selectedEmailKey);
+  const target = visible[index + delta];
+  if (target) selectVisitorEmail(target.viewKey);
 }
 
 loadEmails();
@@ -7723,21 +8888,11 @@ function registerPageRoutes(app2) {
   app2.get("/admin", (c) => c.html(adminPage("mail")));
   app2.get("/admin/rules", (c) => c.html(adminPage("rules")));
   app2.get("/admin/share-links", (c) => c.html(adminPage("share")));
+  app2.get("/admin/database", (c) => c.html(adminPage("database")));
   app2.get("/setup", (c) => c.html(setupPage()));
   app2.get("/v/:token", (c) => c.html(visitorPage(c.req.param("token"))));
 }
 __name(registerPageRoutes, "registerPageRoutes");
-
-// src/utils/text.ts
-function stripHtml(html) {
-  return html.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
-}
-__name(stripHtml, "stripHtml");
-function previewText(value, length = 600) {
-  const trimmed = value.replace(/\s+/g, " ").trim();
-  return trimmed.length > length ? `${trimmed.slice(0, length)}...` : trimmed;
-}
-__name(previewText, "previewText");
 
 // src/routes/visitor.ts
 function registerVisitorRoutes(app2) {
@@ -7757,14 +8912,13 @@ async function visitorEmails(c) {
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
   const emails = candidates.filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules)).map((email) => ({
-    id: email.id,
     subject: email.subject,
-    envelopeFrom: email.envelope_from,
-    envelopeTo: email.envelope_to,
-    fromAddress: email.from_address,
     receivedAt: email.received_at,
     codes: email.codes.map((code) => code.code),
-    body: previewText(email.content.text || stripHtml(email.content.html), 1200),
+    body: previewText(cleanEmailBody(email.content.text || stripHtml(email.content.html)), 1200),
+    bodyText: cleanEmailBody(email.content.text || stripHtml(email.content.html)),
+    bodyHtml: email.content.html || "",
+    trustedAuthentication: hasTrustedAuthentication(email.content.headers),
     contentTruncated: Boolean(email.content_truncated)
   }));
   await Promise.all([markShareLinkAccessed(c.env.DB, link.id), logVisitorAccess(c, link)]);
@@ -7780,6 +8934,21 @@ async function logVisitorAccess(c, link) {
   });
 }
 __name(logVisitorAccess, "logVisitorAccess");
+function hasTrustedAuthentication(headersText) {
+  const text = authenticationHeaderText(headersText).toLowerCase();
+  return /\bdkim\s*=\s*pass\b/.test(text) || /\bdmarc\s*=\s*pass\b/.test(text) || /\barc\s*=\s*pass\b/.test(text);
+}
+__name(hasTrustedAuthentication, "hasTrustedAuthentication");
+function authenticationHeaderText(headersText) {
+  try {
+    const headers = JSON.parse(headersText || "[]");
+    if (!Array.isArray(headers)) return "";
+    return headers.filter((header) => /^(authentication-results|arc-authentication-results)$/i.test(header.key || header.originalKey || "")).map((header) => String(header.value || "")).join("\n");
+  } catch {
+    return headersText || "";
+  }
+}
+__name(authenticationHeaderText, "authenticationHeaderText");
 
 // src/index.ts
 var app = new Hono2();

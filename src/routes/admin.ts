@@ -10,10 +10,11 @@ import {
   sessionSetCookie,
   verifySessionValue
 } from "../services/auth";
+import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmails } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
-import { createRule, getRulesByIds, listRules, parseRuleFields, sanitizeRuleInput, updateRule } from "../services/rules";
-import { createShareLink, listShareLinks, setShareLinkStatus } from "../services/share-links";
+import { createRule, deleteRule, getRulesByIds, listRules, parseRuleFields, sanitizeRuleInput, updateRule } from "../services/rules";
+import { createShareLink, deleteShareLink, listShareLinks, updateShareLink } from "../services/share-links";
 import type { AdminRow, AppEnv } from "../types";
 import { badRequest, clampNumber, forbidden, notFound, readJson, unauthorized } from "../utils/http";
 import { timingSafeEqual } from "../utils/encoding";
@@ -31,10 +32,14 @@ interface ShareLinkBody {
   name?: string | null;
   expiresAt?: string | null;
   ruleIds?: number[];
+  status?: "active" | "disabled";
 }
 
 export function registerAdminRoutes(app: Hono<AppEnv>): void {
-  app.get("/api/setup/status", async (c) => c.json({ ok: true, hasAdmin: (await countAdmins(c.env.DB)) > 0 }));
+  app.get("/api/setup/status", async (c) => {
+    await ensureDatabaseSchema(c.env.DB);
+    return c.json({ ok: true, hasAdmin: (await countAdmins(c.env.DB)) > 0 });
+  });
   app.post("/api/setup/admin", createFirstAdmin);
   app.post("/api/admin/login", login);
   app.post("/api/admin/logout", async (c) => {
@@ -47,16 +52,17 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
   app.get("/api/admin/rules", async (c) => withAdmin(c, () => adminListRules(c)));
   app.post("/api/admin/rules", async (c) => withAdmin(c, () => adminCreateRule(c)));
   app.patch("/api/admin/rules/:id", async (c) => withAdmin(c, () => adminUpdateRule(c)));
+  app.delete("/api/admin/rules/:id", async (c) => withAdmin(c, () => adminDeleteRule(c)));
   app.get("/api/admin/share-links", async (c) => withAdmin(c, () => adminListShareLinks(c)));
   app.post("/api/admin/share-links", async (c) => withAdmin(c, (admin) => adminCreateShareLink(c, admin)));
   app.patch("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminUpdateShareLink(c)));
+  app.delete("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminDeleteShareLink(c)));
+  app.get("/api/admin/database/status", async (c) => withAdmin(c, () => adminDatabaseStatus(c)));
+  app.post("/api/admin/database/upgrade", async (c) => withAdmin(c, () => adminUpgradeDatabase(c)));
   app.get("/api/admin/access-logs", async (c) => withAdmin(c, () => adminAccessLogs(c)));
 }
 
 async function createFirstAdmin(c: Context<AppEnv>): Promise<Response> {
-  if ((await countAdmins(c.env.DB)) > 0) {
-    return forbidden(c, "Admin already exists.");
-  }
   if (!c.env.ADMIN_SETUP_TOKEN) {
     return c.json({ ok: false, error: "ADMIN_SETUP_TOKEN is required before setup." }, 500);
   }
@@ -72,6 +78,10 @@ async function createFirstAdmin(c: Context<AppEnv>): Promise<Response> {
   }
   if (password.length < 10) {
     return badRequest(c, "Password must be at least 10 characters.");
+  }
+  await ensureDatabaseSchema(c.env.DB);
+  if ((await countAdmins(c.env.DB)) > 0) {
+    return forbidden(c, "Admin already exists.");
   }
   const id = await createAdmin(c.env.DB, username, password);
   await writeAccessLog(c.env.DB, { actorType: "system", actorId: id, action: "admin.created", request: c.req.raw });
@@ -147,8 +157,18 @@ async function adminUpdateRule(c: Context<AppEnv>): Promise<Response> {
   return c.json({ ok: true });
 }
 
+async function adminDeleteRule(c: Context<AppEnv>): Promise<Response> {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid rule id.");
+  }
+  await deleteRule(c.env.DB, id);
+  return c.json({ ok: true });
+}
+
 async function adminListShareLinks(c: Context<AppEnv>): Promise<Response> {
-  return c.json({ ok: true, links: await listShareLinks(c.env.DB) });
+  const links = await listShareLinks(c.env.DB);
+  return c.json({ ok: true, links: links.map((link) => publicShareLink(c, link)) });
 }
 
 async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promise<Response> {
@@ -180,12 +200,33 @@ async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promis
 
 async function adminUpdateShareLink(c: Context<AppEnv>): Promise<Response> {
   const id = Number(c.req.param("id"));
-  const body = await readJson<{ status?: "active" | "disabled" }>(c);
-  if (!Number.isInteger(id) || (body?.status !== "active" && body?.status !== "disabled")) {
+  const body = await readJson<ShareLinkBody>(c) ?? {};
+  if (!Number.isInteger(id) || !isValidShareStatus(body.status)) {
     return badRequest(c, "Invalid share link update.");
   }
-  await setShareLinkStatus(c.env.DB, id, body.status);
+  const update = await buildShareLinkUpdate(c, body);
+  if (!update) {
+    return badRequest(c, "Invalid share link update.");
+  }
+  await updateShareLink(c.env.DB, id, update);
   return c.json({ ok: true });
+}
+
+async function adminDeleteShareLink(c: Context<AppEnv>): Promise<Response> {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid share link id.");
+  }
+  await deleteShareLink(c.env.DB, id);
+  return c.json({ ok: true });
+}
+
+async function adminDatabaseStatus(c: Context<AppEnv>): Promise<Response> {
+  return c.json({ ok: true, ...(await getDatabaseStatus(c.env.DB)) });
+}
+
+async function adminUpgradeDatabase(c: Context<AppEnv>): Promise<Response> {
+  return c.json({ ok: true, ...(await applyPendingDatabaseMigrations(c.env.DB)) });
 }
 
 async function adminAccessLogs(c: Context<AppEnv>): Promise<Response> {
@@ -203,10 +244,50 @@ function publicAdmin(admin: AdminRow): Pick<AdminRow, "id" | "username" | "statu
   };
 }
 
+function publicShareLink(c: Context<AppEnv>, link: Awaited<ReturnType<typeof listShareLinks>>[number]) {
+  return {
+    id: link.id,
+    name: link.name,
+    expires_at: link.expires_at,
+    status: link.status,
+    window_minutes: link.window_minutes,
+    created_by_admin_id: link.created_by_admin_id,
+    created_at: link.created_at,
+    last_accessed_at: link.last_accessed_at,
+    ruleIds: link.ruleIds,
+    url: link.token ? new URL(`/v/${link.token}`, c.req.url).toString() : null
+  };
+}
+
 function normalizeExpiresAt(value: string | null | undefined): string | null {
   if (!value) {
     return null;
   }
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function isValidShareStatus(status: ShareLinkBody["status"]): boolean {
+  return status === undefined || status === "active" || status === "disabled";
+}
+
+async function buildShareLinkUpdate(c: Context<AppEnv>, body: ShareLinkBody) {
+  const update: {
+    name?: string | null;
+    expiresAt?: string | null;
+    ruleIds?: number[];
+    status?: "active" | "disabled";
+  } = {};
+  if ("name" in body) update.name = body.name?.trim() || null;
+  if ("expiresAt" in body) update.expiresAt = normalizeExpiresAt(body.expiresAt);
+  if (body.status) update.status = body.status;
+  if (Array.isArray(body.ruleIds)) {
+    const ruleIds = body.ruleIds.filter(Number.isInteger);
+    if (ruleIds.length === 0) return null;
+    const uniqueRuleIds = [...new Set(ruleIds)];
+    const rules = await getRulesByIds(c.env.DB, uniqueRuleIds, true);
+    if (rules.length !== uniqueRuleIds.length) return null;
+    update.ruleIds = uniqueRuleIds;
+  }
+  return Object.keys(update).length > 0 ? update : null;
 }

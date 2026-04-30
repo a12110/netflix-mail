@@ -2,7 +2,7 @@ import PostalMime from "postal-mime";
 import type { Address, Attachment, Email, Mailbox } from "postal-mime";
 import { DEFAULT_EMAIL_LIMIT, DEFAULT_MAX_EMAIL_BODY_BYTES, DEFAULT_MAX_EMAIL_HEADERS_BYTES, MAX_EMAIL_LIMIT } from "../constants";
 import type { EmailCodeRow, EmailRow, EmailSummary, Env } from "../types";
-import { extractCodes, insertCodes } from "./codes";
+import { extractCodes, insertCodes, type CodeCandidate } from "./codes";
 import {
   getContentChunks,
   insertContentChunks,
@@ -111,12 +111,14 @@ export async function getEmailDetail(db: D1Database, id: number): Promise<EmailD
   if (!row) {
     return null;
   }
-  const [chunks, codes] = await Promise.all([getContentChunks(db, id), listCodes(db, id)]);
+  const [chunks, storedCodes] = await Promise.all([getContentChunks(db, id), listCodes(db, id)]);
+  const content = reconstructContent(chunks);
+  const codes = materializeCodeRows(id, storedCodes, extractCodes({ subject: row.subject, text: content.text, html: content.html }));
   return {
     ...row,
     toAddresses: parseJsonArray(row.to_addresses_json),
     attachments: parseJsonArray<AttachmentMeta>(row.attachments_json),
-    content: reconstructContent(chunks),
+    content,
     codes
   };
 }
@@ -231,6 +233,14 @@ function parseJsonArray<T = string>(value: string): T[] {
   } catch {
     return [];
   }
+}
+
+
+function materializeCodeRows(emailId: number, storedRows: EmailCodeRow[], candidates: CodeCandidate[]): EmailCodeRow[] {
+  return candidates.map((candidate, index) => {
+    const stored = storedRows.find((row) => row.code === candidate.code && row.source === candidate.source);
+    return stored ?? { id: 0 - index, email_id: emailId, code: candidate.code, source: candidate.source, created_at: "" };
+  });
 }
 
 async function listCodes(db: D1Database, emailId: number): Promise<EmailCodeRow[]> {

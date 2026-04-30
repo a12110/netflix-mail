@@ -6,7 +6,7 @@ import { getShareLinkByToken, isShareLinkUsable, markShareLinkAccessed } from ".
 import type { AppEnv, ShareLinkRow } from "../types";
 import { notFound } from "../utils/http";
 import { minutesAgoIso } from "../utils/time";
-import { previewText, stripHtml } from "../utils/text";
+import { cleanEmailBody, previewText, stripHtml } from "../utils/text";
 
 export function registerVisitorRoutes(app: Hono<AppEnv>): void {
   app.get("/api/visitor/:token/emails", visitorEmails);
@@ -28,14 +28,13 @@ async function visitorEmails(c: Context<AppEnv>): Promise<Response> {
   const emails = candidates
     .filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules))
     .map((email) => ({
-      id: email.id,
       subject: email.subject,
-      envelopeFrom: email.envelope_from,
-      envelopeTo: email.envelope_to,
-      fromAddress: email.from_address,
       receivedAt: email.received_at,
       codes: email.codes.map((code) => code.code),
-      body: previewText(email.content.text || stripHtml(email.content.html), 1200),
+      body: previewText(cleanEmailBody(email.content.text || stripHtml(email.content.html)), 1200),
+      bodyText: cleanEmailBody(email.content.text || stripHtml(email.content.html)),
+      bodyHtml: email.content.html || "",
+      trustedAuthentication: hasTrustedAuthentication(email.content.headers),
       contentTruncated: Boolean(email.content_truncated)
     }));
 
@@ -50,4 +49,22 @@ async function logVisitorAccess(c: Context<AppEnv>, link: ShareLinkRow): Promise
     action: "share_link.view",
     request: c.req.raw
   });
+}
+
+function hasTrustedAuthentication(headersText: string): boolean {
+  const text = authenticationHeaderText(headersText).toLowerCase();
+  return /\bdkim\s*=\s*pass\b/.test(text) || /\bdmarc\s*=\s*pass\b/.test(text) || /\barc\s*=\s*pass\b/.test(text);
+}
+
+function authenticationHeaderText(headersText: string): string {
+  try {
+    const headers = JSON.parse(headersText || "[]") as Array<{ key?: string; originalKey?: string; value?: string }>;
+    if (!Array.isArray(headers)) return "";
+    return headers
+      .filter((header) => /^(authentication-results|arc-authentication-results)$/i.test(header.key || header.originalKey || ""))
+      .map((header) => String(header.value || ""))
+      .join("\n");
+  } catch {
+    return headersText || "";
+  }
 }

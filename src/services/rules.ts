@@ -52,12 +52,13 @@ export async function listRules(db: D1Database, includeDisabled = true): Promise
   return result.results;
 }
 
-export async function getRulesByIds(db: D1Database, ids: number[]): Promise<RuleRow[]> {
+export async function getRulesByIds(db: D1Database, ids: number[], includeDisabled = false): Promise<RuleRow[]> {
   if (ids.length === 0) {
     return [];
   }
   const placeholders = ids.map((_, index) => `?${index + 1}`).join(", ");
-  const result = await db.prepare(`SELECT * FROM rules WHERE enabled = 1 AND id IN (${placeholders})`).bind(...ids).all<RuleRow>();
+  const enabledClause = includeDisabled ? "" : "enabled = 1 AND ";
+  const result = await db.prepare(`SELECT * FROM rules WHERE ${enabledClause}id IN (${placeholders})`).bind(...ids).all<RuleRow>();
   return result.results;
 }
 
@@ -96,6 +97,10 @@ export async function updateRule(db: D1Database, id: number, input: RuleInput): 
       id
     )
     .run();
+}
+
+export async function deleteRule(db: D1Database, id: number): Promise<void> {
+  await db.prepare("DELETE FROM rules WHERE id = ?1").bind(id).run();
 }
 
 function normalize(value: string, caseSensitive: boolean): string {
