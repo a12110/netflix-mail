@@ -169,8 +169,14 @@ function ruleForm(): string {
 <form id="rule-form" class="modal-form">
   <input type="hidden" name="id">
   <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
-  <label>规则名称</label><input name="name" placeholder="例如：登录验证码" required>
-  <label>关键词</label><input name="keyword" placeholder="请输入关键词" required>
+  <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
+  <label>规则类型</label>
+  <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
+  <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access" required></textarea>
+  <div class="rule-grid">
+    <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
+    <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
+  </div>
   <label>匹配字段</label>
   <div class="chips">
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
@@ -180,8 +186,9 @@ function ruleForm(): string {
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
   </div>
-  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option></select>
+  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+  <details class="rule-advanced"><summary>高级表达式 JSON（可选，支持 and/or/not 嵌套）</summary><textarea name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><p class="muted">填写后会优先使用这里的表达式；留空则根据上方关键词和字段自动生成。</p></details>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
   <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
 </form>

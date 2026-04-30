@@ -1,21 +1,19 @@
-# Copilot Check
+# Copilot Check：规则过滤器升级
 
-## 2026-04-30 用户侧邮件显示同步评审
+## 评审结论
+通过。变更实现了分享链接绑定范围内的白名单/黑名单过滤，并支持高级表达式；旧规则字段和旧 payload 保持兼容。
 
-### 结论
-- 通过。访客页已同步后台邮件正文显示逻辑：优先 HTML iframe 正文预览，纯文本邮件回退到清洗后的 `pre.mail-body`。
-- 访客页不展示后台高级信息（Headers、Attachments、HTML 原文等）。
+## 检查项
+- 逻辑正确性：`evaluateRuleSet()` 明确执行“allow 命中且 block 未命中”规则，访客接口已切换到该决策函数。
+- 兼容性：保留 `keyword`、`fields_json`、`match_mode`、`case_sensitive`，旧规则在 `expression_json` 缺失时自动转换为表达式。
+- 数据库：新增 `0003_rule_expressions` 文件迁移，并同步 Worker 内置迁移；内置迁移按列存在性幂等执行。
+- 安全与性能：regex 保存时校验合法性并限制 200 字符；无效 regex 不进入运行时。
+- UI 易用性：管理端提供多关键词快速模式与高级 JSON 表达式；分享链接选择中按白名单/黑名单分组。
 
-### 关键检查
-- 逻辑正确性：`/api/visitor/:token/emails` 返回 `bodyText`、`bodyHtml`、`trustedAuthentication`，前端根据认证状态决定是否自动加载远程图片/链接。
-- 安全性：iframe 继续禁用 script、form、object、embed、frame、connect；默认 `referrerpolicy="no-referrer"`；未可信认证时拦截外部 `src/srcset/href`，需要用户点击确认后才加载。
-- 兼容性：保留原 `body`、`codes`、`contentTruncated` 字段，保留 `#emails`、`#refresh`、`#status` DOM hooks。
-- UI：访客邮件卡片改为纵向详情结构，避免正文挤压；复用 `.mail-frame`、`.mail-risk`、`.mail-body`。
+## 验证
+- `yarn run check`：通过，12 个测试文件 / 35 个测试。
+- `yarn build:gui`：退出码 0，已刷新 `dist-gui`；wrangler 在沙箱内写用户偏好日志触发 EPERM 警告，不影响 dry-run 产物。
 
-### 验证
-- `yarn run check`：通过，10 个测试文件 / 26 个测试。
-- in-app browser：已打开 `http://localhost:8787/v/test`，确认访客页 shell 正常加载，过期 token 显示“链接不可用或已过期”。
-
-### 风险/建议
-- 可信认证判断基于邮件头中的 `Authentication-Results`/`ARC-Authentication-Results` 字符串；如果上游解析器未保存这些头，则会按不可信处理并提示用户手动加载。
-- 访客页现在会从 API 返回邮件正文 HTML，但仍在浏览器端 iframe 中清洗/沙箱展示，不返回高级元信息。
+## 已知风险
+- 高级表达式当前通过 JSON 输入完成，功能强但仍需要用户理解表达式结构；后续可继续增强为可视化条件组编辑器。
+- 分享链接更新时要求所选规则中至少有启用白名单；若旧链接只剩停用白名单，则编辑规则集合时会被拒绝，需要先启用/添加白名单。

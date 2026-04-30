@@ -63,6 +63,9 @@ export interface RuleRow {
   match_mode: "contains" | "exact";
   case_sensitive: number;
   enabled: number;
+  action?: "allow" | "block";
+  expression_json?: string | null;
+  schema_version?: number;
   created_at: string;
   updated_at: string;
 }

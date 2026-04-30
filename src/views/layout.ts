@@ -346,6 +346,15 @@ pre {
 .progress-line { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 26px; color: var(--primary); font-weight: 800; }
 .progress-line::before, .progress-line::after { content: ""; width: min(180px, 24vw); height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--primary), #60a5fa); }
 .notice { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border-radius: var(--radius-md); border: 1px solid #bfdbfe; background: rgba(239, 246, 255, 0.86); color: #1e40af; }
+.rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rule-advanced { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
+.rule-advanced summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
+.danger-badge { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
+.ui-message-container { position: fixed; top: 18px; left: 50%; z-index: 9999; display: grid; gap: 10px; width: min(420px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.ui-message { padding: 11px 14px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm); background: #fff; color: var(--primary-dark); font-weight: 800; text-align: center; box-shadow: var(--shadow-md); opacity: 0; transform: translateY(-8px); transition: opacity 180ms ease, transform 180ms ease; }
+.ui-message.visible { opacity: 1; transform: translateY(0); }
+.ui-message.success { color: #15803d; background: var(--success-soft); border-color: #bbf7d0; }
+.ui-message.error { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
 .visitor-shell { min-height: 100vh; width: min(1320px, calc(100vw - 40px)); margin: 0 auto; padding: 34px 0; }
 .visitor-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 28px; }
 .visitor-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 28px; margin-bottom: 22px; }

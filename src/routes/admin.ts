@@ -13,7 +13,7 @@ import {
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
-import { createRule, deleteRule, getRulesByIds, listRules, parseRuleFields, sanitizeRuleInput, updateRule } from "../services/rules";
+import { createRule, deleteRule, getRulesByIds, listRules, parseRuleFields, ruleAction, ruleExpression, sanitizeRuleInput, updateRule } from "../services/rules";
 import { createShareLink, deleteShareLink, listShareLinks, resetShareLinkToken, updateShareLink } from "../services/share-links";
 import type { AdminRow, AppEnv } from "../types";
 import { badRequest, clampNumber, forbidden, notFound, readJson, unauthorized } from "../utils/http";
@@ -136,7 +136,9 @@ async function adminListRules(c: Context<AppEnv>): Promise<Response> {
     fields: parseRuleFields(rule.fields_json),
     matchMode: rule.match_mode,
     caseSensitive: Boolean(rule.case_sensitive),
-    enabled: Boolean(rule.enabled)
+    enabled: Boolean(rule.enabled),
+    action: ruleAction(rule),
+    expression: ruleExpression(rule)
   }));
   return c.json({ ok: true, rules });
 }
@@ -184,6 +186,9 @@ async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promis
   const rules = await getRulesByIds(c.env.DB, uniqueRuleIds);
   if (rules.length !== uniqueRuleIds.length) {
     return badRequest(c, "All selected rules must exist and be enabled.");
+  }
+  if (!hasAllowRule(rules)) {
+    return badRequest(c, "At least one allow rule is required.");
   }
   const created = await createShareLink(c.env.DB, {
     name: body?.name?.trim() || null,
@@ -286,6 +291,10 @@ function normalizeExpiresAt(value: string | null | undefined): string | null {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
+function hasAllowRule(rules: Awaited<ReturnType<typeof getRulesByIds>>): boolean {
+  return rules.some((rule) => Boolean(rule.enabled) && ruleAction(rule) === "allow");
+}
+
 function isValidShareStatus(status: ShareLinkBody["status"]): boolean {
   return status === undefined || status === "active" || status === "disabled";
 }
@@ -305,7 +314,7 @@ async function buildShareLinkUpdate(c: Context<AppEnv>, body: ShareLinkBody) {
     if (ruleIds.length === 0) return null;
     const uniqueRuleIds = [...new Set(ruleIds)];
     const rules = await getRulesByIds(c.env.DB, uniqueRuleIds, true);
-    if (rules.length !== uniqueRuleIds.length) return null;
+    if (rules.length !== uniqueRuleIds.length || !hasAllowRule(rules)) return null;
     update.ruleIds = uniqueRuleIds;
   }
   return Object.keys(update).length > 0 ? update : null;

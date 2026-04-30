@@ -120,13 +120,23 @@ async function submitRuleForm(event) {
   const form = event.currentTarget;
   const data = new FormData(form);
   const id = String(data.get("id") || "");
+  let expression;
+  try {
+    expression = readRuleExpression(form, data);
+  } catch (error) {
+    optional("#rule-message").textContent = error.message;
+    return;
+  }
   const body = {
     name: data.get("name"),
+    action: data.get("action"),
     keyword: data.get("keyword"),
+    keywords: splitRuleKeywords(data.get("keyword")),
     fields: data.getAll("fields"),
     matchMode: data.get("matchMode"),
     caseSensitive: data.has("caseSensitive"),
-    enabled: data.has("enabled")
+    enabled: data.has("enabled"),
+    expression
   };
   try {
     const path = id ? "/api/admin/rules/" + encodeURIComponent(id) : "/api/admin/rules";
@@ -324,11 +334,12 @@ function renderRulesTable() {
 }
 function renderRuleItem(rule) {
   const status = rule.enabled ? '<span class="badge success">启用</span>' : '<span class="badge muted-badge">停用</span>';
-  const mode = rule.matchMode === "exact" ? "完全相等" : "包含";
+  const type = rule.action === "block" ? '<span class="badge danger-badge">黑名单</span>' : '<span class="badge success">白名单</span>';
+  const summary = summarizeRuleExpression(rule.expression || legacyRuleExpression(rule));
   return '<article class="list-item-card">' +
-    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + status + '</div>' +
-    '<div class="item-meta">' + renderMetaPill("关键词", rule.keyword) + renderMetaPill("字段", rule.fields.join(", ")) + renderMetaPill("方式", mode) +
-    renderMetaPill("大小写", rule.caseSensitive ? "区分" : "不区分") + '</div></div>' +
+    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + type + status + '</div>' +
+    '<div class="item-meta">' + renderMetaPill("表达式", summary) + renderMetaPill("字段", (rule.fields || []).join(", ")) +
+    renderMetaPill("大小写", rule.caseSensitive ? "区分" : "按条件") + '</div></div>' +
     '<div class="item-actions"><button type="button" class="secondary" data-edit-rule="' + rule.id + '">编辑</button>' +
     '<button type="button" class="danger" data-delete-rule="' + rule.id + '">删除</button></div></article>';
 }
@@ -341,6 +352,11 @@ function resetRuleForm() {
   if (!form) return;
   form.reset();
   form.elements.id.value = "";
+  form.elements.action.value = "allow";
+  form.elements.keywordLogic.value = "any";
+  form.elements.fieldLogic.value = "any";
+  form.elements.matchMode.value = "contains";
+  form.elements.expressionJson.value = "";
   form.elements.enabled.checked = true;
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
   optional("#rule-form-title").textContent = "添加规则";
@@ -354,11 +370,13 @@ function editRule(id) {
   resetRuleForm();
   form.elements.id.value = rule.id;
   form.elements.name.value = rule.name || "";
+  form.elements.action.value = rule.action || "allow";
   form.elements.keyword.value = rule.keyword || "";
   form.elements.matchMode.value = rule.matchMode || "contains";
   form.elements.caseSensitive.checked = Boolean(rule.caseSensitive);
   form.elements.enabled.checked = Boolean(rule.enabled);
-  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = rule.fields.includes(input.value); });
+  form.elements.expressionJson.value = rule.expression ? JSON.stringify(rule.expression, null, 2) : "";
+  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = (rule.fields || []).includes(input.value); });
   optional("#rule-form-title").textContent = "编辑规则";
   optional("#rule-submit").textContent = "保存修改";
   showDialog("rule-dialog");
@@ -369,6 +387,47 @@ async function deleteRuleItem(id) {
   await api("/api/admin/rules/" + encodeURIComponent(id), { method: "DELETE" });
   await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
+function readRuleExpression(form, data) {
+  const json = String(data.get("expressionJson") || "").trim();
+  if (json) return JSON.parse(json);
+  return buildQuickRuleExpression(data);
+}
+function buildQuickRuleExpression(data) {
+  const keywords = splitRuleKeywords(data.get("keyword"));
+  const fields = data.getAll("fields");
+  if (keywords.length === 0 || fields.length === 0) throw new Error("请至少填写一个关键词并选择一个字段");
+  const operator = String(data.get("matchMode") || "contains");
+  const caseSensitive = data.has("caseSensitive");
+  const keywordLogic = data.get("keywordLogic") === "all" ? "and" : "or";
+  const fieldLogic = data.get("fieldLogic") === "all" ? "and" : "or";
+  return groupExpression(keywordLogic, keywords.map((value) => groupExpression(fieldLogic, fields.map((field) => ({ op: "condition", field, operator, value, caseSensitive })))));
+}
+function splitRuleKeywords(value) {
+  return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean).filter((item, index, list) => list.indexOf(item) === index);
+}
+function groupExpression(op, children) {
+  return children.length === 1 ? children[0] : { op, children };
+}
+function legacyRuleExpression(rule) {
+  const keywords = splitRuleKeywords(rule.keyword);
+  const fields = rule.fields || [];
+  const operator = rule.matchMode || "contains";
+  return groupExpression("or", keywords.flatMap((value) => fields.map((field) => ({ op: "condition", field, operator, value, caseSensitive: Boolean(rule.caseSensitive) }))));
+}
+function summarizeRuleExpression(expression) {
+  if (!expression) return "-";
+  if (expression.op === "condition") return expression.field + " " + expression.operator + " " + expression.value;
+  if (expression.op === "not") return "NOT (" + summarizeRuleExpression(expression.child) + ")";
+  const joined = (expression.children || []).slice(0, 3).map(summarizeRuleExpression).join(" " + expression.op.toUpperCase() + " ");
+  return (expression.children || []).length > 3 ? joined + " ..." : joined;
+}
+function renderShareRuleOption(rule, selected) {
+  const id = String(rule.id);
+  const type = rule.action === "block" ? "黑" : "白";
+  const label = "[" + type + "] " + rule.name + (rule.enabled ? "" : "（停用）");
+  return '<option value="' + escapeAttribute(id) + '"' + (selected.has(id) ? " selected" : "") + '>' + escapeText(label) + '</option>';
+}
+
 async function loadLinks() {
   const data = await api("/api/admin/share-links");
   state.links = data.links;
@@ -429,11 +488,10 @@ async function copyShareLink(id) {
   const link = state.links.find((item) => Number(item.id) === id);
   if (!link) return;
   if (!link.url) {
-    optional("#link-message").textContent = "旧链接缺少明文 token，请点击“重置链接”后再复制。";
+    showUiMessage("旧链接缺少明文 token，请点击“重置链接”后再复制。", "error");
     return;
   }
-  await copyText(link.url);
-  optional("#link-message").textContent = "已复制链接";
+  await copyShareText(link.url);
 }
 async function resetShareLink(id) {
   const link = state.links.find((item) => Number(item.id) === id);
@@ -454,8 +512,12 @@ function populateShareRules(selectedIds = []) {
   if (!select) return;
   const selected = new Set(selectedIds.map(String));
   const rules = state.rules.filter((rule) => rule.enabled || selected.has(String(rule.id)));
-  select.innerHTML = rules.map((rule) => '<option value="' + rule.id + '"' + (selected.has(String(rule.id)) ? " selected" : "") + '>' +
-    escapeText(rule.name + (rule.enabled ? "" : "（停用）")) + '</option>').join("");
+  select.innerHTML = ["allow", "block"].map((action) => {
+    const groupRules = rules.filter((rule) => (rule.action || "allow") === action);
+    if (groupRules.length === 0) return "";
+    const label = action === "block" ? "屏蔽规则（命中后隐藏）" : "允许规则（至少选择一个）";
+    return '<optgroup label="' + escapeAttribute(label) + '">' + groupRules.map((rule) => renderShareRuleOption(rule, selected)).join("") + '</optgroup>';
+  }).join("");
 }
 async function loadDatabaseStatus() {
   const data = await api("/api/admin/database/status");
@@ -503,9 +565,16 @@ function renderGeneratedLink(url, label = "新链接：") {
   output.classList.remove("hidden");
   output.innerHTML = '<span><strong>' + escapeText(label) + '</strong>' + escapeText(url) + '</span><button type="button" class="secondary" data-copy-new-link>复制</button>';
   on("[data-copy-new-link]", "click", async () => {
-    await copyText(url);
-    optional("#link-message").textContent = "已复制链接";
+    await copyShareText(url);
   });
+}
+async function copyShareText(text) {
+  try {
+    await copyText(text);
+    showUiMessage("已复制链接", "success");
+  } catch {
+    showUiMessage("复制失败，请手动复制链接", "error");
+  }
 }
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
@@ -518,8 +587,28 @@ async function copyText(text) {
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("Copy failed");
+}
+function showUiMessage(content, type = "info") {
+  let container = optional("#ui-message-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "ui-message-container";
+    container.className = "ui-message-container";
+    container.setAttribute("aria-live", "polite");
+    document.body.appendChild(container);
+  }
+  const item = document.createElement("div");
+  item.className = "ui-message " + type;
+  item.textContent = content;
+  container.appendChild(item);
+  window.setTimeout(() => item.classList.add("visible"), 10);
+  window.setTimeout(() => {
+    item.classList.remove("visible");
+    window.setTimeout(() => item.remove(), 220);
+  }, 2600);
 }
 
 (async function init() {

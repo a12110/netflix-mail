@@ -2385,6 +2385,9 @@ CREATE TABLE IF NOT EXISTS rules (
   match_mode TEXT NOT NULL DEFAULT 'contains' CHECK (match_mode IN ('contains', 'exact')),
   case_sensitive INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
+  action TEXT NOT NULL DEFAULT 'allow' CHECK (action IN ('allow', 'block')),
+  expression_json TEXT,
+  schema_version INTEGER NOT NULL DEFAULT 2,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
@@ -2426,6 +2429,7 @@ CREATE INDEX IF NOT EXISTS idx_emails_envelope_to ON emails(envelope_to);
 CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email_id);
 CREATE INDEX IF NOT EXISTS idx_email_codes_code ON email_codes(code);
 CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled);
+CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
 CREATE INDEX IF NOT EXISTS idx_share_links_status ON share_links(status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at DESC);
 `;
@@ -2433,9 +2437,16 @@ var SHARE_LINK_TOKEN_SQL = String.raw`
 ALTER TABLE share_links ADD COLUMN token TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token);
 `;
+var RULE_EXPRESSIONS_SQL = String.raw`
+ALTER TABLE rules ADD COLUMN action TEXT NOT NULL DEFAULT 'allow' CHECK (action IN ('allow', 'block'));
+ALTER TABLE rules ADD COLUMN expression_json TEXT;
+ALTER TABLE rules ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 2;
+CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
+`;
 var DATABASE_MIGRATIONS = [
   { id: "0001_initial", version: "v0.0.1", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
-  { id: "0002_share_link_token", version: "v0.0.2", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL }
+  { id: "0002_share_link_token", version: "v0.0.2", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL },
+  { id: "0003_rule_expressions", version: "v0.0.3", description: "\u652F\u6301\u89C4\u5219\u767D\u9ED1\u540D\u5355\u4E0E\u9AD8\u7EA7\u8868\u8FBE\u5F0F", sql: RULE_EXPRESSIONS_SQL }
 ];
 var UNINITIALIZED_DATABASE_VERSION = "\u672A\u521D\u59CB\u5316";
 async function ensureDatabaseSchema(db) {
@@ -2474,6 +2485,9 @@ async function buildDatabaseResult(db, migrations, appliedMigrations) {
 }
 __name(buildDatabaseResult, "buildDatabaseResult");
 async function currentVersionFromSchema(db, migrations) {
+  if (await columnExists(db, "rules", "expression_json")) {
+    return migrationVersion("0003_rule_expressions");
+  }
   if (await columnExists(db, "share_links", "token")) {
     return migrationVersion("0002_share_link_token");
   }
@@ -2500,6 +2514,10 @@ async function applyMigration(db, migration) {
     await applyShareLinkTokenMigration(db);
     return;
   }
+  if (migration.id === "0003_rule_expressions") {
+    await applyRuleExpressionsMigration(db);
+    return;
+  }
   await runSqlStatements(db, migration.sql);
 }
 __name(applyMigration, "applyMigration");
@@ -2510,6 +2528,19 @@ async function applyShareLinkTokenMigration(db) {
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token)").run();
 }
 __name(applyShareLinkTokenMigration, "applyShareLinkTokenMigration");
+async function applyRuleExpressionsMigration(db) {
+  if (!await columnExists(db, "rules", "action")) {
+    await db.prepare("ALTER TABLE rules ADD COLUMN action TEXT NOT NULL DEFAULT 'allow' CHECK (action IN ('allow', 'block'))").run();
+  }
+  if (!await columnExists(db, "rules", "expression_json")) {
+    await db.prepare("ALTER TABLE rules ADD COLUMN expression_json TEXT").run();
+  }
+  if (!await columnExists(db, "rules", "schema_version")) {
+    await db.prepare("ALTER TABLE rules ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 2").run();
+  }
+  await db.prepare("CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled)").run();
+}
+__name(applyRuleExpressionsMigration, "applyRuleExpressionsMigration");
 async function ensureMigrationTable(db) {
   await db.prepare(MIGRATION_TABLE_SQL).run();
 }
@@ -6950,29 +6981,41 @@ async function writeAccessLog(db, input) {
 __name(writeAccessLog, "writeAccessLog");
 
 // src/services/rules.ts
+var DEFAULT_RULE_FIELDS = ["subject", "text", "html", "code"];
+var MAX_REGEX_PATTERN_LENGTH = 200;
 function parseRuleFields(value) {
   try {
     const parsed = JSON.parse(value);
     return parsed.filter((field) => RULE_FIELDS.includes(field));
   } catch {
-    return ["subject", "text", "html", "code"];
+    return DEFAULT_RULE_FIELDS;
   }
 }
 __name(parseRuleFields, "parseRuleFields");
+function parseRuleKeywords(value) {
+  return String(value ?? "").split(/[\n,]/).map((keyword) => keyword.trim()).filter(Boolean).filter((keyword, index, keywords) => keywords.indexOf(keyword) === index);
+}
+__name(parseRuleKeywords, "parseRuleKeywords");
 function sanitizeRuleInput(input) {
   const name = input.name?.trim();
-  const keyword = input.keyword?.trim();
-  const fields = (input.fields ?? []).filter((field) => RULE_FIELDS.includes(field));
-  if (!name || !keyword || fields.length === 0) {
+  const action = input.action === "block" ? "block" : "allow";
+  const caseSensitive = Boolean(input.caseSensitive);
+  const expression = sanitizeRuleExpression(input.expression) ?? legacyExpressionFromInput(input, caseSensitive);
+  if (!name || !expression) {
     return null;
   }
+  const keywords = extractExpressionKeywords(expression);
+  const fields = extractExpressionFields(expression);
   return {
     name,
-    keyword,
-    fields,
+    keyword: keywords.join("\n") || name,
+    keywords,
+    fields: fields.length > 0 ? fields : DEFAULT_RULE_FIELDS,
     matchMode: input.matchMode === "exact" ? "exact" : "contains",
-    caseSensitive: Boolean(input.caseSensitive),
-    enabled: input.enabled ?? true
+    caseSensitive,
+    enabled: input.enabled ?? true,
+    action,
+    expression
   };
 }
 __name(sanitizeRuleInput, "sanitizeRuleInput");
@@ -6994,14 +7037,17 @@ async function getRulesByIds(db, ids, includeDisabled = false) {
 __name(getRulesByIds, "getRulesByIds");
 async function createRule(db, input) {
   const result = await db.prepare(
-    "INSERT INTO rules (name, fields_json, keyword, match_mode, case_sensitive, enabled) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+    `INSERT INTO rules (name, fields_json, keyword, match_mode, case_sensitive, enabled, action, expression_json, schema_version)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 2)`
   ).bind(
     input.name,
     JSON.stringify(input.fields),
     input.keyword,
     input.matchMode ?? "contains",
     input.caseSensitive ? 1 : 0,
-    input.enabled === false ? 0 : 1
+    input.enabled === false ? 0 : 1,
+    input.action,
+    JSON.stringify(input.expression)
   ).run();
   return Number(result.meta.last_row_id);
 }
@@ -7010,8 +7056,9 @@ async function updateRule(db, id, input) {
   await db.prepare(
     `UPDATE rules
        SET name = ?1, fields_json = ?2, keyword = ?3, match_mode = ?4, case_sensitive = ?5, enabled = ?6,
+           action = ?7, expression_json = ?8, schema_version = 2,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-       WHERE id = ?7`
+       WHERE id = ?9`
   ).bind(
     input.name,
     JSON.stringify(input.fields),
@@ -7019,6 +7066,8 @@ async function updateRule(db, id, input) {
     input.matchMode ?? "contains",
     input.caseSensitive ? 1 : 0,
     input.enabled === false ? 0 : 1,
+    input.action,
+    JSON.stringify(input.expression),
     id
   ).run();
 }
@@ -7027,51 +7076,160 @@ async function deleteRule(db, id) {
   await db.prepare("DELETE FROM rules WHERE id = ?1").bind(id).run();
 }
 __name(deleteRule, "deleteRule");
+function ruleAction(rule) {
+  return rule.action === "block" ? "block" : "allow";
+}
+__name(ruleAction, "ruleAction");
+function ruleExpression(rule) {
+  const parsed = sanitizeRuleExpression(parseJson(rule.expression_json));
+  return parsed ?? legacyExpressionFromRule(rule);
+}
+__name(ruleExpression, "ruleExpression");
+function matchesRule(email, rule) {
+  return Boolean(rule.enabled) && evaluateExpression(email, ruleExpression(rule));
+}
+__name(matchesRule, "matchesRule");
+function evaluateRuleSet(email, rules) {
+  const matchedAllowRuleIds = [];
+  const matchedBlockRuleIds = [];
+  for (const rule of rules) {
+    if (!matchesRule(email, rule)) continue;
+    if (ruleAction(rule) === "block") matchedBlockRuleIds.push(rule.id);
+    else matchedAllowRuleIds.push(rule.id);
+  }
+  const allowed = matchedAllowRuleIds.length > 0;
+  const blocked = matchedBlockRuleIds.length > 0;
+  return { allowed, blocked, visible: allowed && !blocked, matchedAllowRuleIds, matchedBlockRuleIds };
+}
+__name(evaluateRuleSet, "evaluateRuleSet");
+function extractExpressionKeywords(expression) {
+  if (expression.op === "condition") return [expression.value];
+  if (expression.op === "not") return extractExpressionKeywords(expression.child);
+  return unique(expression.children.flatMap(extractExpressionKeywords));
+}
+__name(extractExpressionKeywords, "extractExpressionKeywords");
+function extractExpressionFields(expression) {
+  if (expression.op === "condition") return [expression.field];
+  if (expression.op === "not") return extractExpressionFields(expression.child);
+  return unique(expression.children.flatMap(extractExpressionFields));
+}
+__name(extractExpressionFields, "extractExpressionFields");
+function sanitizeRuleExpression(value) {
+  if (!value || typeof value !== "object") return null;
+  const raw2 = value;
+  if (raw2.op === "condition") return sanitizeCondition(raw2);
+  if (raw2.op === "not") {
+    const child = sanitizeRuleExpression(raw2.child);
+    return child ? { op: "not", child } : null;
+  }
+  if (raw2.op !== "and" && raw2.op !== "or") return null;
+  if (!Array.isArray(raw2.children)) return null;
+  const children = raw2.children.map(sanitizeRuleExpression).filter((child) => Boolean(child));
+  if (children.length === 0) return null;
+  return children.length === 1 ? children[0] : { op: raw2.op, children };
+}
+__name(sanitizeRuleExpression, "sanitizeRuleExpression");
+function sanitizeCondition(raw2) {
+  const field = raw2.field;
+  const operator = raw2.operator;
+  const value = typeof raw2.value === "string" ? raw2.value.trim() : "";
+  if (!RULE_FIELDS.includes(field) || !isRuleOperator(operator) || !value) return null;
+  if (operator === "regex" && !isSafeRegexPattern(value)) return null;
+  return { op: "condition", field, operator, value, caseSensitive: Boolean(raw2.caseSensitive) };
+}
+__name(sanitizeCondition, "sanitizeCondition");
+function legacyExpressionFromInput(input, caseSensitive) {
+  const fields = (input.fields ?? []).filter((field) => RULE_FIELDS.includes(field));
+  const keywords = input.keywords?.length ? input.keywords : parseRuleKeywords(input.keyword);
+  if (fields.length === 0 || keywords.length === 0) return null;
+  const operator = input.matchMode === "exact" ? "exact" : "contains";
+  const keywordGroups = keywords.map((keyword) => expressionGroup("or", fields.map((field) => ({ op: "condition", field, operator, value: keyword, caseSensitive })))).filter((group) => Boolean(group));
+  return expressionGroup("or", keywordGroups);
+}
+__name(legacyExpressionFromInput, "legacyExpressionFromInput");
+function legacyExpressionFromRule(rule) {
+  const fields = parseRuleFields(rule.fields_json);
+  const keywords = parseRuleKeywords(rule.keyword);
+  const operator = rule.match_mode === "exact" ? "exact" : "contains";
+  const caseSensitive = Boolean(rule.case_sensitive);
+  const conditions = keywords.flatMap((value) => fields.map((field) => ({ op: "condition", field, operator, value, caseSensitive })));
+  return expressionGroup("or", conditions) ?? { op: "condition", field: "subject", operator: "contains", value: "__never_match__" };
+}
+__name(legacyExpressionFromRule, "legacyExpressionFromRule");
+function evaluateExpression(email, expression) {
+  if (expression.op === "condition") return evaluateCondition(email, expression);
+  if (expression.op === "not") return !evaluateExpression(email, expression.child);
+  const matches = expression.children.map((child) => evaluateExpression(email, child));
+  return expression.op === "and" ? matches.every(Boolean) : matches.some(Boolean);
+}
+__name(evaluateExpression, "evaluateExpression");
+function evaluateCondition(email, condition) {
+  return fieldValues(email, condition.field).some((rawValue) => matchesValue(rawValue, condition));
+}
+__name(evaluateCondition, "evaluateCondition");
+function matchesValue(rawValue, condition) {
+  const value = normalize(rawValue, Boolean(condition.caseSensitive));
+  const expected = normalize(condition.value, Boolean(condition.caseSensitive));
+  if (condition.operator === "exact") return value === expected;
+  if (condition.operator === "startsWith") return value.startsWith(expected);
+  if (condition.operator === "endsWith") return value.endsWith(expected);
+  if (condition.operator === "regex") return regexMatches(rawValue, condition.value, Boolean(condition.caseSensitive));
+  return value.includes(expected);
+}
+__name(matchesValue, "matchesValue");
+function fieldValues(email, field) {
+  if (field === "from") return [email.fromAddress ?? ""];
+  if (field === "to") return [email.envelopeTo, ...email.toAddresses];
+  if (field === "subject") return [email.subject ?? ""];
+  if (field === "text") return [email.text];
+  if (field === "html") return [email.html];
+  return email.codes;
+}
+__name(fieldValues, "fieldValues");
+function isRuleOperator(value) {
+  return value === "contains" || value === "exact" || value === "startsWith" || value === "endsWith" || value === "regex";
+}
+__name(isRuleOperator, "isRuleOperator");
+function isSafeRegexPattern(pattern) {
+  if (pattern.length > MAX_REGEX_PATTERN_LENGTH) return false;
+  try {
+    new RegExp(pattern);
+    return true;
+  } catch {
+    return false;
+  }
+}
+__name(isSafeRegexPattern, "isSafeRegexPattern");
+function regexMatches(value, pattern, caseSensitive) {
+  try {
+    return new RegExp(pattern, caseSensitive ? "" : "i").test(value);
+  } catch {
+    return false;
+  }
+}
+__name(regexMatches, "regexMatches");
 function normalize(value, caseSensitive) {
   return caseSensitive ? value : value.toLowerCase();
 }
 __name(normalize, "normalize");
-function fieldValues(email, field) {
-  if (field === "from") {
-    return [email.fromAddress ?? ""];
-  }
-  if (field === "to") {
-    return [email.envelopeTo, ...email.toAddresses];
-  }
-  if (field === "subject") {
-    return [email.subject ?? ""];
-  }
-  if (field === "text") {
-    return [email.text];
-  }
-  if (field === "html") {
-    return [email.html];
-  }
-  return email.codes;
+function expressionGroup(op, children) {
+  if (children.length === 0) return null;
+  return children.length === 1 ? children[0] : { op, children };
 }
-__name(fieldValues, "fieldValues");
-function matchesRule(email, rule) {
-  if (!rule.enabled) {
-    return false;
+__name(expressionGroup, "expressionGroup");
+function parseJson(value) {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
   }
-  const fields = parseRuleFields(rule.fields_json);
-  const caseSensitive = Boolean(rule.case_sensitive);
-  const keyword = normalize(rule.keyword, caseSensitive);
-  for (const field of fields) {
-    for (const rawValue of fieldValues(email, field)) {
-      const value = normalize(rawValue, caseSensitive);
-      if (rule.match_mode === "exact" ? value === keyword : value.includes(keyword)) {
-        return true;
-      }
-    }
-  }
-  return false;
 }
-__name(matchesRule, "matchesRule");
-function matchesAnyRule(email, rules) {
-  return rules.some((rule) => matchesRule(email, rule));
+__name(parseJson, "parseJson");
+function unique(values) {
+  return values.filter((value, index) => values.indexOf(value) === index);
 }
-__name(matchesAnyRule, "matchesAnyRule");
+__name(unique, "unique");
 
 // src/services/share-links.ts
 async function hashShareToken(token) {
@@ -7308,7 +7466,9 @@ async function adminListRules(c) {
     fields: parseRuleFields(rule.fields_json),
     matchMode: rule.match_mode,
     caseSensitive: Boolean(rule.case_sensitive),
-    enabled: Boolean(rule.enabled)
+    enabled: Boolean(rule.enabled),
+    action: ruleAction(rule),
+    expression: ruleExpression(rule)
   }));
   return c.json({ ok: true, rules });
 }
@@ -7356,6 +7516,9 @@ async function adminCreateShareLink(c, admin) {
   const rules = await getRulesByIds(c.env.DB, uniqueRuleIds);
   if (rules.length !== uniqueRuleIds.length) {
     return badRequest(c, "All selected rules must exist and be enabled.");
+  }
+  if (!hasAllowRule(rules)) {
+    return badRequest(c, "At least one allow rule is required.");
   }
   const created = await createShareLink(c.env.DB, {
     name: body?.name?.trim() || null,
@@ -7458,6 +7621,10 @@ function normalizeExpiresAt(value) {
   return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 __name(normalizeExpiresAt, "normalizeExpiresAt");
+function hasAllowRule(rules) {
+  return rules.some((rule) => Boolean(rule.enabled) && ruleAction(rule) === "allow");
+}
+__name(hasAllowRule, "hasAllowRule");
 function isValidShareStatus(status) {
   return status === void 0 || status === "active" || status === "disabled";
 }
@@ -7472,7 +7639,7 @@ async function buildShareLinkUpdate(c, body) {
     if (ruleIds.length === 0) return null;
     const uniqueRuleIds = [...new Set(ruleIds)];
     const rules = await getRulesByIds(c.env.DB, uniqueRuleIds, true);
-    if (rules.length !== uniqueRuleIds.length) return null;
+    if (rules.length !== uniqueRuleIds.length || !hasAllowRule(rules)) return null;
     update.ruleIds = uniqueRuleIds;
   }
   return Object.keys(update).length > 0 ? update : null;
@@ -8129,6 +8296,15 @@ pre {
 .progress-line { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 26px; color: var(--primary); font-weight: 800; }
 .progress-line::before, .progress-line::after { content: ""; width: min(180px, 24vw); height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--primary), #60a5fa); }
 .notice { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border-radius: var(--radius-md); border: 1px solid #bfdbfe; background: rgba(239, 246, 255, 0.86); color: #1e40af; }
+.rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.rule-advanced { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
+.rule-advanced summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
+.danger-badge { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
+.ui-message-container { position: fixed; top: 18px; left: 50%; z-index: 9999; display: grid; gap: 10px; width: min(420px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
+.ui-message { padding: 11px 14px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm); background: #fff; color: var(--primary-dark); font-weight: 800; text-align: center; box-shadow: var(--shadow-md); opacity: 0; transform: translateY(-8px); transition: opacity 180ms ease, transform 180ms ease; }
+.ui-message.visible { opacity: 1; transform: translateY(0); }
+.ui-message.success { color: #15803d; background: var(--success-soft); border-color: #bbf7d0; }
+.ui-message.error { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
 .visitor-shell { min-height: 100vh; width: min(1320px, calc(100vw - 40px)); margin: 0 auto; padding: 34px 0; }
 .visitor-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 28px; }
 .visitor-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 28px; margin-bottom: 22px; }
@@ -8475,13 +8651,23 @@ async function submitRuleForm(event) {
   const form = event.currentTarget;
   const data = new FormData(form);
   const id = String(data.get("id") || "");
+  let expression;
+  try {
+    expression = readRuleExpression(form, data);
+  } catch (error) {
+    optional("#rule-message").textContent = error.message;
+    return;
+  }
   const body = {
     name: data.get("name"),
+    action: data.get("action"),
     keyword: data.get("keyword"),
+    keywords: splitRuleKeywords(data.get("keyword")),
     fields: data.getAll("fields"),
     matchMode: data.get("matchMode"),
     caseSensitive: data.has("caseSensitive"),
-    enabled: data.has("enabled")
+    enabled: data.has("enabled"),
+    expression
   };
   try {
     const path = id ? "/api/admin/rules/" + encodeURIComponent(id) : "/api/admin/rules";
@@ -8679,11 +8865,12 @@ function renderRulesTable() {
 }
 function renderRuleItem(rule) {
   const status = rule.enabled ? '<span class="badge success">启用</span>' : '<span class="badge muted-badge">停用</span>';
-  const mode = rule.matchMode === "exact" ? "完全相等" : "包含";
+  const type = rule.action === "block" ? '<span class="badge danger-badge">黑名单</span>' : '<span class="badge success">白名单</span>';
+  const summary = summarizeRuleExpression(rule.expression || legacyRuleExpression(rule));
   return '<article class="list-item-card">' +
-    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + status + '</div>' +
-    '<div class="item-meta">' + renderMetaPill("关键词", rule.keyword) + renderMetaPill("字段", rule.fields.join(", ")) + renderMetaPill("方式", mode) +
-    renderMetaPill("大小写", rule.caseSensitive ? "区分" : "不区分") + '</div></div>' +
+    '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + type + status + '</div>' +
+    '<div class="item-meta">' + renderMetaPill("表达式", summary) + renderMetaPill("字段", (rule.fields || []).join(", ")) +
+    renderMetaPill("大小写", rule.caseSensitive ? "区分" : "按条件") + '</div></div>' +
     '<div class="item-actions"><button type="button" class="secondary" data-edit-rule="' + rule.id + '">编辑</button>' +
     '<button type="button" class="danger" data-delete-rule="' + rule.id + '">删除</button></div></article>';
 }
@@ -8696,6 +8883,11 @@ function resetRuleForm() {
   if (!form) return;
   form.reset();
   form.elements.id.value = "";
+  form.elements.action.value = "allow";
+  form.elements.keywordLogic.value = "any";
+  form.elements.fieldLogic.value = "any";
+  form.elements.matchMode.value = "contains";
+  form.elements.expressionJson.value = "";
   form.elements.enabled.checked = true;
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
   optional("#rule-form-title").textContent = "添加规则";
@@ -8709,11 +8901,13 @@ function editRule(id) {
   resetRuleForm();
   form.elements.id.value = rule.id;
   form.elements.name.value = rule.name || "";
+  form.elements.action.value = rule.action || "allow";
   form.elements.keyword.value = rule.keyword || "";
   form.elements.matchMode.value = rule.matchMode || "contains";
   form.elements.caseSensitive.checked = Boolean(rule.caseSensitive);
   form.elements.enabled.checked = Boolean(rule.enabled);
-  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = rule.fields.includes(input.value); });
+  form.elements.expressionJson.value = rule.expression ? JSON.stringify(rule.expression, null, 2) : "";
+  form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = (rule.fields || []).includes(input.value); });
   optional("#rule-form-title").textContent = "编辑规则";
   optional("#rule-submit").textContent = "保存修改";
   showDialog("rule-dialog");
@@ -8724,6 +8918,47 @@ async function deleteRuleItem(id) {
   await api("/api/admin/rules/" + encodeURIComponent(id), { method: "DELETE" });
   await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
+function readRuleExpression(form, data) {
+  const json = String(data.get("expressionJson") || "").trim();
+  if (json) return JSON.parse(json);
+  return buildQuickRuleExpression(data);
+}
+function buildQuickRuleExpression(data) {
+  const keywords = splitRuleKeywords(data.get("keyword"));
+  const fields = data.getAll("fields");
+  if (keywords.length === 0 || fields.length === 0) throw new Error("请至少填写一个关键词并选择一个字段");
+  const operator = String(data.get("matchMode") || "contains");
+  const caseSensitive = data.has("caseSensitive");
+  const keywordLogic = data.get("keywordLogic") === "all" ? "and" : "or";
+  const fieldLogic = data.get("fieldLogic") === "all" ? "and" : "or";
+  return groupExpression(keywordLogic, keywords.map((value) => groupExpression(fieldLogic, fields.map((field) => ({ op: "condition", field, operator, value, caseSensitive })))));
+}
+function splitRuleKeywords(value) {
+  return String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean).filter((item, index, list) => list.indexOf(item) === index);
+}
+function groupExpression(op, children) {
+  return children.length === 1 ? children[0] : { op, children };
+}
+function legacyRuleExpression(rule) {
+  const keywords = splitRuleKeywords(rule.keyword);
+  const fields = rule.fields || [];
+  const operator = rule.matchMode || "contains";
+  return groupExpression("or", keywords.flatMap((value) => fields.map((field) => ({ op: "condition", field, operator, value, caseSensitive: Boolean(rule.caseSensitive) }))));
+}
+function summarizeRuleExpression(expression) {
+  if (!expression) return "-";
+  if (expression.op === "condition") return expression.field + " " + expression.operator + " " + expression.value;
+  if (expression.op === "not") return "NOT (" + summarizeRuleExpression(expression.child) + ")";
+  const joined = (expression.children || []).slice(0, 3).map(summarizeRuleExpression).join(" " + expression.op.toUpperCase() + " ");
+  return (expression.children || []).length > 3 ? joined + " ..." : joined;
+}
+function renderShareRuleOption(rule, selected) {
+  const id = String(rule.id);
+  const type = rule.action === "block" ? "黑" : "白";
+  const label = "[" + type + "] " + rule.name + (rule.enabled ? "" : "（停用）");
+  return '<option value="' + escapeAttribute(id) + '"' + (selected.has(id) ? " selected" : "") + '>' + escapeText(label) + '</option>';
+}
+
 async function loadLinks() {
   const data = await api("/api/admin/share-links");
   state.links = data.links;
@@ -8784,11 +9019,10 @@ async function copyShareLink(id) {
   const link = state.links.find((item) => Number(item.id) === id);
   if (!link) return;
   if (!link.url) {
-    optional("#link-message").textContent = "旧链接缺少明文 token，请点击“重置链接”后再复制。";
+    showUiMessage("旧链接缺少明文 token，请点击“重置链接”后再复制。", "error");
     return;
   }
-  await copyText(link.url);
-  optional("#link-message").textContent = "已复制链接";
+  await copyShareText(link.url);
 }
 async function resetShareLink(id) {
   const link = state.links.find((item) => Number(item.id) === id);
@@ -8809,8 +9043,12 @@ function populateShareRules(selectedIds = []) {
   if (!select) return;
   const selected = new Set(selectedIds.map(String));
   const rules = state.rules.filter((rule) => rule.enabled || selected.has(String(rule.id)));
-  select.innerHTML = rules.map((rule) => '<option value="' + rule.id + '"' + (selected.has(String(rule.id)) ? " selected" : "") + '>' +
-    escapeText(rule.name + (rule.enabled ? "" : "（停用）")) + '</option>').join("");
+  select.innerHTML = ["allow", "block"].map((action) => {
+    const groupRules = rules.filter((rule) => (rule.action || "allow") === action);
+    if (groupRules.length === 0) return "";
+    const label = action === "block" ? "屏蔽规则（命中后隐藏）" : "允许规则（至少选择一个）";
+    return '<optgroup label="' + escapeAttribute(label) + '">' + groupRules.map((rule) => renderShareRuleOption(rule, selected)).join("") + '</optgroup>';
+  }).join("");
 }
 async function loadDatabaseStatus() {
   const data = await api("/api/admin/database/status");
@@ -8858,9 +9096,16 @@ function renderGeneratedLink(url, label = "新链接：") {
   output.classList.remove("hidden");
   output.innerHTML = '<span><strong>' + escapeText(label) + '</strong>' + escapeText(url) + '</span><button type="button" class="secondary" data-copy-new-link>复制</button>';
   on("[data-copy-new-link]", "click", async () => {
-    await copyText(url);
-    optional("#link-message").textContent = "已复制链接";
+    await copyShareText(url);
   });
+}
+async function copyShareText(text) {
+  try {
+    await copyText(text);
+    showUiMessage("已复制链接", "success");
+  } catch {
+    showUiMessage("复制失败，请手动复制链接", "error");
+  }
 }
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
@@ -8873,8 +9118,28 @@ async function copyText(text) {
   textarea.style.opacity = "0";
   document.body.appendChild(textarea);
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   textarea.remove();
+  if (!copied) throw new Error("Copy failed");
+}
+function showUiMessage(content, type = "info") {
+  let container = optional("#ui-message-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "ui-message-container";
+    container.className = "ui-message-container";
+    container.setAttribute("aria-live", "polite");
+    document.body.appendChild(container);
+  }
+  const item = document.createElement("div");
+  item.className = "ui-message " + type;
+  item.textContent = content;
+  container.appendChild(item);
+  window.setTimeout(() => item.classList.add("visible"), 10);
+  window.setTimeout(() => {
+    item.classList.remove("visible");
+    window.setTimeout(() => item.remove(), 220);
+  }, 2600);
 }
 
 (async function init() {
@@ -9052,8 +9317,14 @@ function ruleForm() {
 <form id="rule-form" class="modal-form">
   <input type="hidden" name="id">
   <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
-  <label>规则名称</label><input name="name" placeholder="例如：登录验证码" required>
-  <label>关键词</label><input name="keyword" placeholder="请输入关键词" required>
+  <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
+  <label>规则类型</label>
+  <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
+  <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access" required></textarea>
+  <div class="rule-grid">
+    <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
+    <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
+  </div>
   <label>匹配字段</label>
   <div class="chips">
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
@@ -9063,8 +9334,9 @@ function ruleForm() {
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
     <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
   </div>
-  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option></select>
+  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+  <details class="rule-advanced"><summary>高级表达式 JSON（可选，支持 and/or/not 嵌套）</summary><textarea name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><p class="muted">填写后会优先使用这里的表达式；留空则根据上方关键词和字段自动生成。</p></details>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
   <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
 </form>
@@ -9428,7 +9700,7 @@ async function visitorEmails(c) {
   const requestedPage = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
-  const matchedEmails = candidates.filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules)).map((email) => ({
+  const matchedEmails = candidates.filter((email) => evaluateRuleSet(emailDetailToRuleInput(email), rules).visible).map((email) => ({
     subject: email.subject,
     receivedAt: email.received_at,
     codes: email.codes.map((code) => code.code),

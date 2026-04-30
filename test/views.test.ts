@@ -39,6 +39,11 @@ describe("view templates", () => {
     const databaseHtml = adminPage("database");
 
     expect(rulesHtml).toContain('id="rule-form"');
+    expect(rulesHtml).toContain('name="action"');
+    expect(rulesHtml).toContain('name="keywordLogic"');
+    expect(rulesHtml).toContain('name="fieldLogic"');
+    expect(rulesHtml).toContain('name="expressionJson"');
+    expect(rulesHtml).toContain('高级表达式 JSON');
     expect(rulesHtml).toContain('id="rules-table"');
     expect(rulesHtml).not.toContain('id="link-form"');
     expect(rulesHtml).not.toContain('id="search-form"');
@@ -47,6 +52,9 @@ describe("view templates", () => {
     expect(shareHtml).toContain('id="links-table"');
     expect(shareHtml).toContain('id="share-rules"');
     expect(shareHtml).toContain("data-reset-link");
+    expect(shareHtml).toContain("showUiMessage");
+    expect(shareHtml).toContain("允许规则（至少选择一个）");
+    expect(shareHtml).toContain("屏蔽规则（命中后隐藏）");
     expect(shareHtml).not.toContain('id="rule-form"');
     expect(shareHtml).not.toContain('id="search-form"');
 

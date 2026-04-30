@@ -2,7 +2,7 @@ import type { Context, Hono } from "hono";
 import { MAX_EMAIL_LIMIT, MAX_EMAIL_PAGE } from "../constants";
 import { emailDetailToRuleInput, listCandidateEmailDetailsSince } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
-import { getRulesByIds, matchesAnyRule } from "../services/rules";
+import { evaluateRuleSet, getRulesByIds } from "../services/rules";
 import { getShareLinkByToken, isShareLinkUsable, markShareLinkAccessed } from "../services/share-links";
 import type { AppEnv, ShareLinkRow } from "../types";
 import { clampNumber, notFound } from "../utils/http";
@@ -29,7 +29,7 @@ async function visitorEmails(c: Context<AppEnv>): Promise<Response> {
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
   const matchedEmails = candidates
-    .filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules))
+    .filter((email) => evaluateRuleSet(emailDetailToRuleInput(email), rules).visible)
     .map((email) => ({
       subject: email.subject,
       receivedAt: email.received_at,
