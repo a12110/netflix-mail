@@ -6935,115 +6935,292 @@ __name(page, "page");
 var BASE_STYLES = String.raw`
 :root {
   color-scheme: light;
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --text: #1b1f24;
-  --muted: #65707f;
-  --line: #d9dee7;
-  --accent: #0b63ce;
-  --danger: #b42318;
-  --ok: #047857;
+  --bg: #f3f8ff;
+  --bg-soft: #eef6ff;
+  --surface: rgba(255, 255, 255, 0.92);
+  --surface-solid: #ffffff;
+  --surface-muted: #f8fbff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --muted-strong: #475569;
+  --line: #dbe7f6;
+  --line-strong: #c6d8ef;
+  --primary: #0b74de;
+  --primary-dark: #075fb8;
+  --primary-soft: #e8f2ff;
+  --success: #16a34a;
+  --success-soft: #dcfce7;
+  --warning: #f59e0b;
+  --warning-soft: #fff7ed;
+  --danger: #dc2626;
+  --danger-soft: #fef2f2;
+  --shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 18px 50px rgba(15, 23, 42, 0.10);
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --sidebar: 260px;
 }
 * { box-sizing: border-box; }
+html { min-height: 100%; }
 body {
   margin: 0;
-  background: var(--bg);
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 8% 18%, rgba(59, 130, 246, 0.13), transparent 28%),
+    radial-gradient(circle at 88% 10%, rgba(14, 165, 233, 0.10), transparent 24%),
+    linear-gradient(180deg, #f8fbff 0%, var(--bg) 100%);
   color: var(--text);
-  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--line);
-}
-main { width: min(1180px, calc(100vw - 32px)); margin: 24px auto; }
-section {
+a { color: var(--primary); text-decoration: none; }
+a:hover { color: var(--primary-dark); }
+h1, h2, h3, p { margin: 0; }
+h1 { font-size: clamp(28px, 3vw, 40px); line-height: 1.15; letter-spacing: -0.04em; }
+h2 { font-size: 18px; line-height: 1.25; letter-spacing: -0.02em; }
+h3 { font-size: 15px; line-height: 1.35; }
+main { width: min(1280px, calc(100vw - 32px)); margin: 28px auto; }
+section, .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
 }
-h1, h2, h3 { margin: 0; line-height: 1.2; }
-h1 { font-size: 20px; }
-h2 { font-size: 16px; margin-bottom: 12px; }
-h3 { font-size: 14px; margin-bottom: 8px; }
-.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; }
+section { padding: 22px; margin-bottom: 18px; }
+label { display: block; color: var(--muted-strong); font-weight: 650; font-size: 13px; margin: 14px 0 7px; }
+input, select, textarea {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.86);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+  transition: border-color 180ms ease, box-shadow 180ms ease, background 180ms ease;
+}
+input::placeholder, textarea::placeholder { color: #94a3b8; }
+input:focus, select:focus, textarea:focus {
+  border-color: rgba(11, 116, 222, 0.72);
+  box-shadow: 0 0 0 4px rgba(11, 116, 222, 0.12);
+  background: #fff;
+}
+input[type="checkbox"], input[type="radio"] {
+  width: 16px;
+  min-height: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+textarea { min-height: 96px; resize: vertical; }
+button, .button-link {
+  min-height: 44px;
+  border: 1px solid var(--primary);
+  background: linear-gradient(135deg, var(--primary), #0869c9);
+  color: #fff;
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: transform 180ms ease, box-shadow 180ms ease, background 180ms ease, border-color 180ms ease;
+}
+button:hover, .button-link:hover { box-shadow: 0 12px 26px rgba(11, 116, 222, 0.22); color: #fff; }
+button:active, .button-link:active { transform: translateY(1px); }
+button.secondary, .button-link.secondary { background: #fff; color: var(--primary); border-color: var(--line-strong); }
+button.secondary:hover, .button-link.secondary:hover { border-color: var(--primary); color: var(--primary-dark); box-shadow: var(--shadow-sm); }
+button.danger { background: #fff; color: var(--danger); border-color: #fecaca; }
+button.danger:hover { border-color: var(--danger); box-shadow: 0 10px 22px rgba(220, 38, 38, 0.12); color: var(--danger); }
+button:disabled { opacity: 0.55; cursor: not-allowed; box-shadow: none; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 3px solid rgba(11, 116, 222, 0.25);
+  outline-offset: 2px;
+}
+table { width: 100%; border-collapse: separate; border-spacing: 0; }
+th, td { border-bottom: 1px solid var(--line); padding: 14px 12px; text-align: left; vertical-align: middle; }
+th { color: var(--muted); font-weight: 750; font-size: 12px; background: var(--surface-muted); }
+tbody tr { transition: background 180ms ease; }
+tbody tr:hover { background: #f7fbff; }
+tr[data-id] { cursor: pointer; }
+pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: linear-gradient(180deg, #f8fbff, #f3f7fc);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+  max-height: 360px;
+  overflow: auto;
+  color: #334155;
+}
+.hidden { display: none !important; }
+.muted { color: var(--muted); }
+.ok { color: var(--success); }
+.danger-text { color: var(--danger); }
+.grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; }
 .span-4 { grid-column: span 4; }
 .span-5 { grid-column: span 5; }
 .span-7 { grid-column: span 7; }
 .span-8 { grid-column: span 8; }
 .span-12 { grid-column: span 12; }
-label { display: block; color: var(--muted); font-size: 12px; margin: 10px 0 4px; }
-input, select, textarea {
-  width: 100%;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 9px 10px;
-  background: #fff;
-  color: var(--text);
-  font: inherit;
+.toolbar { display: flex; gap: 12px; align-items: end; flex-wrap: wrap; }
+.toolbar > * { min-width: 150px; }
+.card-header, .page-title-row, .topbar, .brand, .nav-item, .metric-card, .inline-status {
+  display: flex;
+  align-items: center;
 }
-textarea { min-height: 78px; resize: vertical; }
-button {
-  border: 1px solid var(--accent);
-  background: var(--accent);
-  color: #fff;
-  border-radius: 6px;
-  padding: 9px 12px;
-  font: inherit;
-  cursor: pointer;
-}
-button.secondary { background: #fff; color: var(--accent); }
-button.danger { background: var(--danger); border-color: var(--danger); }
-button:disabled { opacity: 0.55; cursor: not-allowed; }
-.toolbar { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; }
-.toolbar > * { min-width: 160px; }
-.muted { color: var(--muted); }
-.ok { color: var(--ok); }
-.danger-text { color: var(--danger); }
-.hidden { display: none !important; }
-table { width: 100%; border-collapse: collapse; }
-th, td { border-bottom: 1px solid var(--line); padding: 9px 8px; text-align: left; vertical-align: top; }
-th { color: var(--muted); font-weight: 600; font-size: 12px; }
-tr[data-id] { cursor: pointer; }
-pre {
-  white-space: pre-wrap;
-  word-break: break-word;
-  background: #f9fafb;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 12px;
-  max-height: 360px;
-  overflow: auto;
-}
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
+.card-header { justify-content: space-between; gap: 14px; margin-bottom: 18px; }
+.card-title { display: grid; gap: 4px; }
+.page-title-row { justify-content: space-between; gap: 18px; margin-bottom: 22px; }
+.page-kicker { color: var(--primary); font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; font-size: 12px; }
+.brand { gap: 12px; font-weight: 850; font-size: 18px; letter-spacing: -0.02em; }
+.brand-icon, .soft-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 13px;
   display: inline-flex;
   align-items: center;
-  min-height: 24px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 2px 8px;
-  color: var(--muted);
-  background: #fff;
+  justify-content: center;
+  flex: 0 0 auto;
+  color: #fff;
+  background: linear-gradient(135deg, #1778e8, #075fb8);
+  box-shadow: 0 12px 28px rgba(11, 116, 222, 0.20);
 }
+.brand-icon svg, .soft-icon svg { width: 22px; height: 22px; stroke: currentColor; }
+.soft-icon { color: var(--primary); background: var(--primary-soft); box-shadow: none; }
+.soft-icon.success { color: var(--success); background: var(--success-soft); }
+.soft-icon.warning { color: var(--warning); background: var(--warning-soft); }
+.badge, .chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-weight: 750;
+  color: var(--primary);
+  background: var(--primary-soft);
+  border: 1px solid #cfe3ff;
+}
+.badge.success, .chip.success { color: #15803d; background: var(--success-soft); border-color: #bbf7d0; }
+.badge.muted-badge { color: var(--muted-strong); background: #f1f5f9; border-color: #e2e8f0; }
 .code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 18px;
-  letter-spacing: 0;
-  color: var(--accent);
+  letter-spacing: 0.02em;
+  color: #059669;
+  background: var(--success-soft);
+  border-color: #bbf7d0;
 }
-@media (max-width: 820px) {
-  header { padding: 14px 16px; align-items: flex-start; flex-direction: column; }
-  main { width: min(100vw - 20px, 1180px); margin-top: 12px; }
-  .grid { display: block; }
-  .toolbar > * { min-width: 100%; }
-  th:nth-child(4), td:nth-child(4) { display: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.checkbox-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 11px;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--primary);
+  cursor: pointer;
+}
+.inline-status { gap: 8px; color: var(--muted-strong); font-weight: 650; }
+.status-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 5px rgba(34, 197, 94, 0.14); }
+.table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius-md); }
+.table-wrap table { min-width: 720px; }
+.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
+.metric-card { gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
+.metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 850; letter-spacing: -0.04em; margin-top: 4px; }
+.app-shell { min-height: 100vh; display: grid; grid-template-columns: var(--sidebar) minmax(0, 1fr); }
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 24px 18px;
+  background: rgba(255,255,255,0.78);
+  border-right: 1px solid var(--line);
+  backdrop-filter: blur(18px);
+}
+.sidebar-nav { display: grid; gap: 8px; margin-top: 34px; }
+.nav-item {
+  gap: 10px;
+  min-height: 46px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  color: var(--muted-strong);
+  font-weight: 720;
+}
+.nav-item.active, .nav-item:hover { background: #e9f3ff; color: var(--primary); }
+.nav-item svg { width: 19px; height: 19px; stroke: currentColor; }
+.sidebar-footer { position: absolute; left: 18px; right: 18px; bottom: 24px; padding-top: 18px; border-top: 1px solid var(--line); }
+.content-shell { min-width: 0; }
+.topbar {
+  min-height: 76px;
+  justify-content: space-between;
+  padding: 18px 28px;
+  background: rgba(255,255,255,0.66);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(18px);
+}
+.dashboard-main { width: min(1480px, calc(100vw - var(--sidebar) - 56px)); margin: 28px auto; }
+.search-panel { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; gap: 14px; align-items: end; }
+.detail-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+.detail-row { display: grid; grid-template-columns: 110px 1fr; gap: 14px; padding: 8px 0; color: var(--muted-strong); }
+.hero-auth { min-height: 100vh; display: grid; grid-template-columns: minmax(280px, 420px) 520px; gap: 54px; align-items: center; width: min(1320px, calc(100vw - 48px)); margin: 0 auto; padding: 48px 0; background: transparent; border: 0; box-shadow: none; }
+.hero-copy { display: grid; gap: 28px; }
+.compact-hero { align-content: center; gap: 22px; }
+.hero-copy p { font-size: 17px; color: var(--muted-strong); }
+.hero-features { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.feature-card { padding: 16px; display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
+.auth-card { padding: 42px; border-radius: 28px; background: rgba(255,255,255,0.86); border: 1px solid var(--line); box-shadow: var(--shadow-md); }
+.auth-card form { margin-top: 26px; }
+.form-actions { display: grid; gap: 12px; margin-top: 20px; }
+.setup-shell { min-height: 100vh; padding: 28px; }
+.setup-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 44px; }
+.setup-card { width: min(760px, 100%); margin: 0 auto; padding: 42px; text-align: center; }
+.setup-card form { text-align: left; margin-top: 26px; }
+.progress-line { display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 26px; color: var(--primary); font-weight: 800; }
+.progress-line::before, .progress-line::after { content: ""; width: min(180px, 24vw); height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--primary), #60a5fa); }
+.notice { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border-radius: var(--radius-md); border: 1px solid #bfdbfe; background: rgba(239, 246, 255, 0.86); color: #1e40af; }
+.visitor-shell { min-height: 100vh; width: min(1320px, calc(100vw - 40px)); margin: 0 auto; padding: 34px 0; }
+.visitor-header { display: flex; justify-content: space-between; align-items: center; gap: 18px; margin-bottom: 28px; }
+.visitor-hero { display: grid; grid-template-columns: auto 1fr auto; gap: 22px; align-items: center; padding: 28px; margin-bottom: 22px; }
+.visitor-count { font-size: 28px; font-weight: 850; color: var(--primary); }
+.email-card { display: grid; grid-template-columns: 64px minmax(0, 1.2fr) minmax(240px, 1fr) 170px; gap: 18px; align-items: center; padding: 20px 24px; margin-bottom: 14px; }
+.email-body-preview { color: var(--muted-strong); }
+.empty-state { padding: 32px; text-align: center; color: var(--muted); background: var(--surface); border: 1px dashed var(--line-strong); border-radius: var(--radius-md); }
+@media (max-width: 1100px) {
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; padding: 18px; }
+  .sidebar-nav { grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 18px; }
+  .sidebar-footer { position: static; margin-top: 18px; }
+  .dashboard-main { width: min(100vw - 32px, 1180px); }
+  .hero-auth { grid-template-columns: 1fr; }
+  .metric-grid, .hero-features { grid-template-columns: 1fr; }
+  .email-card { grid-template-columns: 54px 1fr; }
+}
+@media (max-width: 760px) {
+  main, .dashboard-main, .visitor-shell { width: min(100vw - 24px, 100%); margin-top: 16px; }
+  section { padding: 16px; }
+  .grid, .search-panel, .visitor-hero { display: block; }
+  .toolbar > *, .search-panel > * { min-width: 100%; }
+  .page-title-row, .topbar, .visitor-header, .card-header { align-items: flex-start; flex-direction: column; }
+  .sidebar-nav { grid-template-columns: 1fr; }
+  .hero-auth { width: min(100vw - 24px, 100%); padding: 24px 0; gap: 22px; }
+  .auth-card, .setup-card { padding: 24px; }
+  .setup-shell { padding: 18px 12px; }
+  .email-card { grid-template-columns: 1fr; }
+  .detail-row { grid-template-columns: 1fr; gap: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
 }`;
 function styles() {
   return BASE_STYLES;
@@ -7051,105 +7228,150 @@ function styles() {
 __name(styles, "styles");
 
 // src/views/admin.ts
-function adminPage() {
-  return page("\u7BA1\u7406\u5458\u540E\u53F0", ADMIN_BODY, adminScript());
+function adminPage(section = "mail") {
+  return page("\u7BA1\u7406\u5458\u540E\u53F0", adminBody(section), adminScript(section));
 }
 __name(adminPage, "adminPage");
-var ADMIN_BODY = String.raw`<header>
-  <h1>Netflix Mail</h1>
-  <div class="toolbar">
-    <span id="admin-name" class="muted"></span>
-    <button id="logout" class="secondary hidden" type="button">退出</button>
-  </div>
-</header>
-<main>
-  <section id="login-section">
-    <h2>管理员登录</h2>
-    <form id="login-form">
-      <label>用户名</label>
-      <input name="username" autocomplete="username" required>
-      <label>密码</label>
-      <input name="password" type="password" autocomplete="current-password" required>
-      <div class="toolbar" style="margin-top:12px">
-        <button type="submit">登录</button>
-        <a href="/setup">初始化管理员</a>
-        <span id="login-message" class="muted"></span>
-      </div>
-    </form>
-  </section>
-
-  <div id="app-section" class="hidden">
-    <section>
-      <h2>邮件</h2>
-      <form id="search-form" class="toolbar">
-        <div>
-          <label>搜索</label>
-          <input name="q" placeholder="主题、发件人、收件人">
-        </div>
-        <button type="submit">查询</button>
-        <button id="reload-emails" type="button" class="secondary">刷新</button>
-      </form>
-      <div id="emails-table"></div>
-    </section>
-
-    <section id="email-detail" class="hidden">
-      <h2>邮件详情</h2>
-      <div id="email-detail-content"></div>
-    </section>
-
-    <div class="grid">
-      <section class="span-5">
-        <h2>规则</h2>
-        <form id="rule-form">
-          <label>名称</label>
-          <input name="name" required>
-          <label>关键词</label>
-          <input name="keyword" required>
-          <label>字段</label>
-          <div class="chips">
-            <label><input type="checkbox" name="fields" value="from"> From</label>
-            <label><input type="checkbox" name="fields" value="to"> To</label>
-            <label><input type="checkbox" name="fields" value="subject" checked> Subject</label>
-            <label><input type="checkbox" name="fields" value="text" checked> Text</label>
-            <label><input type="checkbox" name="fields" value="html"> HTML</label>
-            <label><input type="checkbox" name="fields" value="code" checked> Code</label>
-          </div>
-          <label>匹配方式</label>
-          <select name="matchMode">
-            <option value="contains">包含</option>
-            <option value="exact">完全相等</option>
-          </select>
-          <label><input type="checkbox" name="caseSensitive"> 区分大小写</label>
-          <div class="toolbar" style="margin-top:12px">
-            <button type="submit">保存规则</button>
-            <span id="rule-message" class="muted"></span>
-          </div>
-        </form>
-        <div id="rules-table"></div>
-      </section>
-
-      <section class="span-7">
-        <h2>分享链接</h2>
-        <form id="link-form">
-          <label>名称</label>
-          <input name="name" placeholder="例如：临时访客">
-          <label>过期时间</label>
-          <input name="expiresAt" type="datetime-local">
-          <label>规则</label>
-          <select id="share-rules" name="ruleIds" multiple size="5" required></select>
-          <div class="toolbar" style="margin-top:12px">
-            <button type="submit">生成链接</button>
-            <span id="link-message" class="muted"></span>
-          </div>
-        </form>
-        <pre id="new-link" class="hidden"></pre>
-        <div id="links-table"></div>
-      </section>
+var MAIL_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
+var SHIELD_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="m9 12 2 2 4-5" stroke-width="2"/></svg>`;
+var LINK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" stroke-width="2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" stroke-width="2"/></svg>`;
+var RULE_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M7 12h10M10 19h4" stroke-width="2" stroke-linecap="round"/></svg>`;
+var TITLES = {
+  mail: "\u90AE\u4EF6\u4E2D\u5FC3",
+  rules: "\u89C4\u5219\u7BA1\u7406",
+  share: "\u5206\u4EAB\u94FE\u63A5"
+};
+function adminBody(section) {
+  return String.raw`
+${loginSection()}
+<div id="app-section" class="app-shell hidden">
+  <aside class="sidebar">
+    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>邮件管家</span></div>
+    <nav class="sidebar-nav" aria-label="后台导航">
+      ${navItem("mail", section, "/admin", MAIL_ICON, "\u90AE\u4EF6\u4E2D\u5FC3")}
+      ${navItem("rules", section, "/admin/rules", RULE_ICON, "\u89C4\u5219\u7BA1\u7406")}
+      ${navItem("share", section, "/admin/share-links", LINK_ICON, "\u5206\u4EAB\u94FE\u63A5")}
+    </nav>
+    <div class="sidebar-footer">
+      <div class="inline-status"><span class="status-dot"></span><span>系统运行正常</span></div>
     </div>
+  </aside>
+  <div class="content-shell">
+    <header class="topbar">
+      <div><p class="page-kicker">Netflix Mail Console</p><h2>${TITLES[section]}</h2></div>
+      <div class="toolbar">
+        <span id="admin-name" class="badge muted-badge"></span>
+        <button id="logout" class="secondary hidden" type="button">退出登录</button>
+      </div>
+    </header>
+    <main class="dashboard-main">${moduleContent(section)}</main>
   </div>
-</main>`;
+</div>`;
+}
+__name(adminBody, "adminBody");
+function loginSection() {
+  return String.raw`<section id="login-section" class="hero-auth">
+  <div class="hero-copy compact-hero">
+    <div class="brand"><span class="brand-icon">${MAIL_ICON}</span><span>Netflix Mail</span></div>
+    <div><h1>管理员后台</h1><p style="margin-top:12px">临时邮件访问与分享管理。</p></div>
+  </div>
+  <div class="auth-card">
+    <div class="card-title"><p class="page-kicker">Admin Portal</p><h1>管理员登录</h1><p class="muted">仅授权管理员可访问邮件中心。</p></div>
+    <form id="login-form">
+      <label>用户名</label><input name="username" autocomplete="username" placeholder="请输入用户名" required>
+      <label>密码</label><input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+      <div class="form-actions"><button type="submit">登录后台</button><span id="login-message" class="muted"></span></div>
+    </form>
+  </div>
+</section>`;
+}
+__name(loginSection, "loginSection");
+function navItem(section, current, href, icon, label) {
+  const activeClass = section === current ? " active" : "";
+  return `<a class="nav-item${activeClass}" href="${href}">${icon}<span>${label}</span></a>`;
+}
+__name(navItem, "navItem");
+function moduleContent(section) {
+  if (section === "rules") return rulesSection();
+  if (section === "share") return shareSection();
+  return mailSection();
+}
+__name(moduleContent, "moduleContent");
+function mailSection() {
+  return String.raw`<section id="mail-center">
+  <div class="page-title-row"><div><p class="page-kicker">Mail Center</p><h1>邮件中心</h1><p class="muted">搜索、查看验证码候选与原始邮件内容。</p></div></div>
+  <div class="metric-grid" aria-label="邮件统计">
+    <div class="metric-card"><span class="soft-icon">${MAIL_ICON}</span><div><span class="muted">当前列表</span><span id="metric-total" class="metric-value">0</span></div></div>
+    <div class="metric-card"><span class="soft-icon success">${SHIELD_ICON}</span><div><span class="muted">验证码候选</span><span id="metric-codes" class="metric-value">0</span></div></div>
+    <div class="metric-card"><span class="soft-icon warning">${RULE_ICON}</span><div><span class="muted">最近收件</span><span id="metric-recent" class="metric-value">--</span></div></div>
+  </div>
+  <form id="search-form" class="search-panel">
+    <div><label>搜索</label><input name="q" placeholder="主题、发件人、收件人"></div>
+    <button type="submit">查询</button><button id="reload-emails" type="button" class="secondary">刷新</button>
+  </form>
+  <div id="emails-table" style="margin-top:18px"></div>
+</section>
+<section id="email-detail" class="hidden">
+  <div class="card-header"><div class="card-title"><p class="page-kicker">Message Detail</p><h2>邮件详情</h2></div></div>
+  <div id="email-detail-content"></div>
+</section>`;
+}
+__name(mailSection, "mailSection");
+function rulesSection() {
+  return String.raw`<section id="rule-center">
+  <div class="card-header"><div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">独立维护访客可见邮件的匹配规则。</p></div></div>
+  <div class="grid">
+    <div class="span-4">${ruleForm()}</div>
+    <div class="span-8"><div id="rules-table"></div></div>
+  </div>
+</section>`;
+}
+__name(rulesSection, "rulesSection");
+function shareSection() {
+  return String.raw`<section id="share-center">
+  <div class="card-header"><div class="card-title"><p class="page-kicker">Share Links</p><h1>分享链接</h1><p class="muted">为访客生成临时访问链接，只返回最近 30 分钟命中邮件。</p></div></div>
+  <div class="grid">
+    <div class="span-4">${shareForm()}</div>
+    <div class="span-8"><pre id="new-link" class="hidden"></pre><div id="links-table"></div></div>
+  </div>
+</section>`;
+}
+__name(shareSection, "shareSection");
+function ruleForm() {
+  return String.raw`<form id="rule-form" class="card" style="padding:18px">
+  <label>规则名称</label><input name="name" placeholder="例如：登录验证码" required>
+  <label>关键词</label><input name="keyword" placeholder="请输入关键词" required>
+  <label>匹配字段</label>
+  <div class="chips">
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
+    <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
+  </div>
+  <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option></select>
+  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+  <div class="form-actions"><button type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
+</form>`;
+}
+__name(ruleForm, "ruleForm");
+function shareForm() {
+  return String.raw`<form id="link-form" class="card" style="padding:18px">
+  <label>链接名称</label><input name="name" placeholder="例如：临时访客">
+  <label>过期时间</label><input name="expiresAt" type="datetime-local">
+  <label>绑定规则</label><select id="share-rules" name="ruleIds" multiple size="7" required></select>
+  <div class="form-actions"><button type="submit">生成链接</button><span id="link-message" class="muted"></span></div>
+</form>`;
+}
+__name(shareForm, "shareForm");
+function adminScript(section) {
+  return ADMIN_SCRIPT.replace("__ADMIN_SECTION__", section);
+}
+__name(adminScript, "adminScript");
 var ADMIN_SCRIPT = String.raw`
 const state = { rules: [] };
+const currentPage = "__ADMIN_SECTION__";
 const loginSection = document.querySelector("#login-section");
 const appSection = document.querySelector("#app-section");
 const loginMessage = document.querySelector("#login-message");
@@ -7161,26 +7383,25 @@ function escapeText(value) {
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
   }[char]));
 }
-
-async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { "content-type": "application/json", ...(options.headers || {}) }
-  });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(data.error || "请求失败");
-  }
-  return data;
+function formatDate(value) { return value ? new Date(value).toLocaleString() : "--"; }
+function optional(selector) { return document.querySelector(selector); }
+function on(selector, eventName, handler) {
+  const element = optional(selector);
+  if (element) element.addEventListener(eventName, handler);
 }
 
+async function api(path, options = {}) {
+  const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "请求失败");
+  return data;
+}
 function showApp(admin) {
   loginSection.classList.add("hidden");
   appSection.classList.remove("hidden");
   logoutButton.classList.remove("hidden");
   adminName.textContent = admin.username;
 }
-
 function showLogin() {
   loginSection.classList.remove("hidden");
   appSection.classList.add("hidden");
@@ -7188,207 +7409,190 @@ function showLogin() {
   adminName.textContent = "";
 }
 
-document.querySelector("#login-form").addEventListener("submit", async (event) => {
+on("#login-form", "submit", async (event) => {
   event.preventDefault();
   loginMessage.textContent = "";
+  loginMessage.className = "muted";
   const body = Object.fromEntries(new FormData(event.currentTarget).entries());
   try {
     const data = await api("/api/admin/login", { method: "POST", body: JSON.stringify(body) });
     showApp(data.admin);
-    await loadAll();
+    await loadCurrentPage();
   } catch (error) {
     loginMessage.textContent = error.message;
     loginMessage.className = "danger-text";
   }
 });
-
-logoutButton.addEventListener("click", async () => {
+on("#logout", "click", async () => {
   await api("/api/admin/logout", { method: "POST", body: "{}" }).catch(() => null);
   showLogin();
 });
-
-document.querySelector("#search-form").addEventListener("submit", async (event) => {
+on("#search-form", "submit", async (event) => {
   event.preventDefault();
   await loadEmails(new FormData(event.currentTarget).get("q"));
 });
-document.querySelector("#reload-emails").addEventListener("click", () => loadEmails());
+on("#reload-emails", "click", () => loadEmails());
+on("#rule-form", "submit", submitRuleForm);
+on("#link-form", "submit", submitLinkForm);
 
-document.querySelector("#rule-form").addEventListener("submit", async (event) => {
+async function loadCurrentPage() {
+  if (currentPage === "rules") await loadRules();
+  if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
+  if (currentPage === "mail") await loadEmails();
+}
+
+async function submitRuleForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = new FormData(form);
-  const body = {
-    name: data.get("name"),
-    keyword: data.get("keyword"),
-    fields: data.getAll("fields"),
-    matchMode: data.get("matchMode"),
-    caseSensitive: data.has("caseSensitive")
-  };
+  const body = { name: data.get("name"), keyword: data.get("keyword"), fields: data.getAll("fields"), matchMode: data.get("matchMode"), caseSensitive: data.has("caseSensitive") };
   try {
     await api("/api/admin/rules", { method: "POST", body: JSON.stringify(body) });
     form.reset();
-    form.querySelectorAll('input[name="fields"]').forEach((input) => {
-      input.checked = ["subject", "text", "code"].includes(input.value);
-    });
-    document.querySelector("#rule-message").textContent = "已保存";
+    form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
+    optional("#rule-message").textContent = "已保存";
     await loadRules();
   } catch (error) {
-    document.querySelector("#rule-message").textContent = error.message;
+    optional("#rule-message").textContent = error.message;
   }
-});
-
-document.querySelector("#link-form").addEventListener("submit", async (event) => {
+}
+async function submitLinkForm(event) {
   event.preventDefault();
   const form = event.currentTarget;
   const data = new FormData(form);
   const expiresRaw = data.get("expiresAt");
-  const body = {
-    name: data.get("name"),
-    expiresAt: expiresRaw ? new Date(expiresRaw).toISOString() : null,
-    ruleIds: data.getAll("ruleIds").map(Number)
-  };
+  const body = { name: data.get("name"), expiresAt: expiresRaw ? new Date(expiresRaw).toISOString() : null, ruleIds: data.getAll("ruleIds").map(Number) };
   try {
     const result = await api("/api/admin/share-links", { method: "POST", body: JSON.stringify(body) });
-    const output = document.querySelector("#new-link");
+    const output = optional("#new-link");
     output.classList.remove("hidden");
     output.textContent = result.url;
-    document.querySelector("#link-message").textContent = "已生成";
+    optional("#link-message").textContent = "已生成";
     await loadLinks();
   } catch (error) {
-    document.querySelector("#link-message").textContent = error.message;
+    optional("#link-message").textContent = error.message;
   }
-});
-
-async function loadAll() {
-  await Promise.all([loadEmails(), loadRules(), loadLinks()]);
 }
 
+function updateMetrics(emails) {
+  const total = optional("#metric-total");
+  if (!total) return;
+  const codeCount = emails.reduce((sum, email) => sum + String(email.codes || "").split(/[\s,]+/).filter(Boolean).length, 0);
+  total.textContent = String(emails.length);
+  optional("#metric-codes").textContent = String(codeCount);
+  optional("#metric-recent").textContent = emails[0] ? new Date(emails[0].received_at).toLocaleTimeString() : "--";
+}
 async function loadEmails(q = "") {
   const data = await api("/api/admin/emails?q=" + encodeURIComponent(q || ""));
+  updateMetrics(data.emails);
   const rows = data.emails.map((email) => '<tr data-id="' + email.id + '">' +
-    '<td>' + email.id + '</td>' +
-    '<td>' + escapeText(email.subject || "(无主题)") + '<div class="muted">' + escapeText(email.codes || "") + '</div></td>' +
+    '<td><span class="badge muted-badge">#' + email.id + '</span></td>' +
+    '<td><strong>' + escapeText(email.subject || "(无主题)") + '</strong><div class="muted">' + escapeText(email.codes || "") + '</div></td>' +
     '<td>' + escapeText(email.from_address || email.envelope_from) + '</td>' +
     '<td>' + escapeText(email.envelope_to) + '</td>' +
-    '<td>' + escapeText(new Date(email.received_at).toLocaleString()) + '</td>' +
-  '</tr>').join("");
-  document.querySelector("#emails-table").innerHTML =
-    '<table><thead><tr><th>ID</th><th>主题</th><th>From</th><th>To</th><th>时间</th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5" class="muted">暂无邮件</td></tr>') + '</tbody></table>';
-  document.querySelectorAll("tr[data-id]").forEach((row) => {
-    row.addEventListener("click", () => loadEmailDetail(row.dataset.id));
-  });
+    '<td>' + escapeText(formatDate(email.received_at)) + '</td></tr>').join("");
+  optional("#emails-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>主题</th><th>From</th><th>To</th><th>时间</th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5"><div class="empty-state">暂无邮件</div></td></tr>') + '</tbody></table></div>';
+  document.querySelectorAll("tr[data-id]").forEach((row) => row.addEventListener("click", () => loadEmailDetail(row.dataset.id)));
 }
-
 async function loadEmailDetail(id) {
   const data = await api("/api/admin/emails/" + encodeURIComponent(id));
   const email = data.email;
   const codes = email.codes.map((code) => '<span class="chip code">' + escapeText(code.code) + '</span>').join("");
-  document.querySelector("#email-detail").classList.remove("hidden");
-  document.querySelector("#email-detail-content").innerHTML =
-    '<div class="chips">' + codes + '</div>' +
-    '<p class="muted">' + escapeText(email.from_address || email.envelope_from) + ' → ' + escapeText(email.envelope_to) + '</p>' +
-    '<h3>Text</h3><pre>' + escapeText(email.content.text || "") + '</pre>' +
-    '<h3>HTML</h3><pre>' + escapeText(email.content.html || "") + '</pre>' +
-    '<h3>Headers</h3><pre>' + escapeText(email.content.headers || "") + '</pre>' +
-    '<h3>Attachments</h3><pre>' + escapeText(JSON.stringify(email.attachments, null, 2)) + '</pre>';
+  optional("#email-detail").classList.remove("hidden");
+  optional("#email-detail-content").innerHTML = '<div class="detail-grid"><div class="chips">' + (codes || '<span class="badge muted-badge">无验证码</span>') + '</div>' +
+    '<div class="detail-row"><strong>发件地址</strong><span>' + escapeText(email.from_address || email.envelope_from) + '</span></div>' +
+    '<div class="detail-row"><strong>收件地址</strong><span>' + escapeText(email.envelope_to) + '</span></div>' +
+    '<h3>Text</h3><pre>' + escapeText(email.content.text || "") + '</pre><h3>HTML</h3><pre>' + escapeText(email.content.html || "") +
+    '</pre><h3>Headers</h3><pre>' + escapeText(email.content.headers || "") + '</pre><h3>Attachments</h3><pre>' + escapeText(JSON.stringify(email.attachments, null, 2)) + '</pre></div>';
 }
 
 async function loadRules() {
   const data = await api("/api/admin/rules");
   state.rules = data.rules;
-  const rows = state.rules.map((rule) => '<tr>' +
-    '<td>' + rule.id + '</td>' +
-    '<td>' + escapeText(rule.name) + '<div class="muted">' + escapeText(rule.keyword) + '</div></td>' +
-    '<td>' + escapeText(rule.fields.join(", ")) + '</td>' +
-    '<td>' + (rule.enabled ? "启用" : "停用") + '</td>' +
-    '<td><button class="secondary" data-disable-rule="' + rule.id + '">停用</button></td>' +
-  '</tr>').join("");
-  document.querySelector("#rules-table").innerHTML =
-    '<table><thead><tr><th>ID</th><th>规则</th><th>字段</th><th>状态</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5" class="muted">暂无规则</td></tr>') + '</tbody></table>';
-  document.querySelector("#share-rules").innerHTML = state.rules
-    .filter((rule) => rule.enabled)
-    .map((rule) => '<option value="' + rule.id + '">' + escapeText(rule.name) + '</option>')
-    .join("");
-  document.querySelectorAll("[data-disable-rule]").forEach((button) => {
-    button.addEventListener("click", () => disableRule(Number(button.dataset.disableRule)));
-  });
+  renderRulesTable();
+  const shareRules = optional("#share-rules");
+  if (shareRules) shareRules.innerHTML = state.rules.filter((rule) => rule.enabled).map((rule) => '<option value="' + rule.id + '">' + escapeText(rule.name) + '</option>').join("");
 }
-
+function renderRulesTable() {
+  const table = optional("#rules-table");
+  if (!table) return;
+  const rows = state.rules.map((rule) => '<tr><td><span class="badge muted-badge">#' + rule.id + '</span></td>' +
+    '<td><strong>' + escapeText(rule.name) + '</strong><div class="muted">' + escapeText(rule.keyword) + '</div></td>' +
+    '<td>' + escapeText(rule.fields.join(", ")) + '</td><td><span class="badge ' + (rule.enabled ? 'success' : 'muted-badge') + '">' + (rule.enabled ? "启用" : "停用") + '</span></td>' +
+    '<td><button class="secondary" data-disable-rule="' + rule.id + '">停用</button></td></tr>').join("");
+  table.innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>规则</th><th>字段</th><th>状态</th><th></th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5"><div class="empty-state">暂无规则</div></td></tr>') + '</tbody></table></div>';
+  document.querySelectorAll("[data-disable-rule]").forEach((button) => button.addEventListener("click", () => disableRule(Number(button.dataset.disableRule))));
+}
 async function disableRule(id) {
   const rule = state.rules.find((item) => item.id === id);
   if (!rule) return;
-  await api("/api/admin/rules/" + id, {
-    method: "PATCH",
-    body: JSON.stringify({ ...rule, enabled: false })
-  });
+  await api("/api/admin/rules/" + id, { method: "PATCH", body: JSON.stringify({ ...rule, enabled: false }) });
   await loadRules();
 }
-
 async function loadLinks() {
   const data = await api("/api/admin/share-links");
-  const rows = data.links.map((link) => '<tr>' +
-    '<td>' + link.id + '</td>' +
-    '<td>' + escapeText(link.name || "") + '<div class="muted">规则：' + escapeText(link.ruleIds.join(", ")) + '</div></td>' +
-    '<td>' + escapeText(link.status) + '</td>' +
-    '<td>' + escapeText(link.expires_at || "长期") + '</td>' +
-    '<td><button class="danger" data-disable-link="' + link.id + '">停用</button></td>' +
-  '</tr>').join("");
-  document.querySelector("#links-table").innerHTML =
-    '<table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>过期</th><th></th></tr></thead><tbody>' +
-    (rows || '<tr><td colspan="5" class="muted">暂无链接</td></tr>') + '</tbody></table>';
-  document.querySelectorAll("[data-disable-link]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      await api("/api/admin/share-links/" + button.dataset.disableLink, {
-        method: "PATCH",
-        body: JSON.stringify({ status: "disabled" })
-      });
-      await loadLinks();
-    });
-  });
+  const rows = data.links.map((link) => '<tr><td><span class="badge muted-badge">#' + link.id + '</span></td>' +
+    '<td><strong>' + escapeText(link.name || "未命名") + '</strong><div class="muted">规则：' + escapeText(link.ruleIds.join(", ")) + '</div></td>' +
+    '<td><span class="badge ' + (link.status === "active" ? 'success' : 'muted-badge') + '">' + escapeText(link.status) + '</span></td>' +
+    '<td>' + escapeText(link.expires_at || "长期") + '</td><td><button class="danger" data-disable-link="' + link.id + '">停用</button></td></tr>').join("");
+  optional("#links-table").innerHTML = '<div class="table-wrap"><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>过期</th><th></th></tr></thead><tbody>' +
+    (rows || '<tr><td colspan="5"><div class="empty-state">暂无链接</div></td></tr>') + '</tbody></table></div>';
+  document.querySelectorAll("[data-disable-link]").forEach((button) => button.addEventListener("click", async () => {
+    await api("/api/admin/share-links/" + button.dataset.disableLink, { method: "PATCH", body: JSON.stringify({ status: "disabled" }) });
+    await loadLinks();
+  }));
 }
 
 (async function init() {
   try {
     const data = await api("/api/admin/me");
     showApp(data.admin);
-    await loadAll();
+    await loadCurrentPage();
   } catch {
     showLogin();
   }
 })();`;
-function adminScript() {
-  return ADMIN_SCRIPT;
-}
-__name(adminScript, "adminScript");
 
 // src/views/setup.ts
 function setupPage() {
-  return page(
-    "\u521D\u59CB\u5316\u7BA1\u7406\u5458",
-    `<header><h1>\u521D\u59CB\u5316\u7BA1\u7406\u5458</h1><a href="/admin">\u7BA1\u7406\u5458\u540E\u53F0</a></header>
-<main>
-  <section>
-    <h2>\u521B\u5EFA\u7B2C\u4E00\u4E2A\u7BA1\u7406\u5458</h2>
-    <form id="setup-form">
-      <label>Setup Token</label>
-      <input name="setupToken" type="password" autocomplete="off" required>
-      <label>\u7528\u6237\u540D</label>
-      <input name="username" autocomplete="username" required>
-      <label>\u5BC6\u7801</label>
-      <input name="password" type="password" autocomplete="new-password" minlength="10" required>
-      <div class="toolbar" style="margin-top:12px">
-        <button type="submit">\u521B\u5EFA</button>
-        <span id="message" class="muted"></span>
-      </div>
-    </form>
-  </section>
-</main>`,
-    setupScript()
-  );
+  return page("\u521D\u59CB\u5316\u7BA1\u7406\u5458", SETUP_BODY, setupScript());
 }
 __name(setupPage, "setupPage");
+var LOCK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M7 11V8a5 5 0 0 1 10 0v3" stroke-width="2"/><rect x="5" y="11" width="14" height="10" rx="2" stroke-width="2"/><path d="M12 15v2" stroke-width="2" stroke-linecap="round"/></svg>`;
+var MAIL_ICON2 = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
+var SETUP_BODY = String.raw`
+<div class="setup-shell">
+  <div class="setup-topbar">
+    <a class="brand" href="/admin"><span class="brand-icon">${MAIL_ICON2}</span><span>Netflix Mail</span></a>
+    <a class="button-link secondary" href="/admin">返回管理员后台</a>
+  </div>
+  <main>
+    <div class="progress-line"><span class="badge">1 / 1</span><span>初始化完成前不可访问后台</span></div>
+    <section class="setup-card">
+      <span class="soft-icon success" style="width:80px;height:80px;margin:0 auto 22px">${LOCK_ICON}</span>
+      <h1>创建第一个管理员</h1>
+      <p class="muted" style="margin-top:12px">本步骤用于初始化系统管理员账号，请妥善保管相关信息。</p>
+      <form id="setup-form">
+        <label>Setup Token</label>
+        <input name="setupToken" type="password" autocomplete="off" placeholder="请输入 Setup Token" required>
+        <label>用户名</label>
+        <input name="username" autocomplete="username" placeholder="请输入用户名" required>
+        <label>密码</label>
+        <input name="password" type="password" autocomplete="new-password" minlength="10" placeholder="请输入至少 10 位密码" required>
+        <div class="form-actions">
+          <button type="submit">创建管理员</button>
+          <span id="message" class="muted"></span>
+        </div>
+      </form>
+    </section>
+    <div class="notice" style="width:min(760px,100%);margin:22px auto 0">
+      <span class="soft-icon">${LOCK_ICON}</span>
+      <div><strong>安全提示</strong><div>请确保在安全环境中操作。初始化完成后该 Token 将失效且无法恢复。</div></div>
+    </div>
+  </main>
+</div>`;
 function setupScript() {
   return `
 const form = document.querySelector("#setup-form");
@@ -7396,6 +7600,7 @@ const message = document.querySelector("#message");
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   message.textContent = "";
+  message.className = "muted";
   const body = Object.fromEntries(new FormData(form).entries());
   const response = await fetch("/api/setup/admin", {
     method: "POST",
@@ -7417,33 +7622,54 @@ __name(setupScript, "setupScript");
 
 // src/views/visitor.ts
 function visitorPage(token) {
-  return page(
-    "\u8BBF\u95EE\u4EE3\u7801",
-    `<header>
-  <h1>\u8BBF\u95EE\u4EE3\u7801</h1>
-  <span id="status" class="muted">\u540C\u6B65\u4E2D</span>
-</header>
-<main>
-  <section>
-    <div class="toolbar">
-      <button id="refresh" type="button">\u5237\u65B0</button>
-      <span class="muted">\u7A97\u53E3\uFF1A\u6700\u8FD1 30 \u5206\u949F</span>
-    </div>
-  </section>
-  <section>
-    <h2>\u90AE\u4EF6</h2>
-    <div id="emails" class="grid"></div>
-  </section>
-</main>`,
-    visitorScript(escapeHtml2(token))
-  );
+  return page("\u8BBF\u95EE\u4EE3\u7801", VISITOR_BODY, visitorScript(token));
 }
 __name(visitorPage, "visitorPage");
+var MAIL_ICON3 = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16v12H4z" stroke-width="2"/><path d="m4 7 8 6 8-6" stroke-width="2"/></svg>`;
+var SHIELD_ICON2 = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="m9 12 2 2 4-5" stroke-width="2"/></svg>`;
+var CLOCK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke-width="2"/><path d="M12 7v5l3 2" stroke-width="2" stroke-linecap="round"/></svg>`;
+var VISITOR_BODY = String.raw`
+<div class="visitor-shell">
+  <header class="visitor-header">
+    <div>
+      <div class="brand"><span class="brand-icon">${MAIL_ICON3}</span><span>访问代码</span></div>
+      <p class="muted" style="margin-top:8px">展示最近 30 分钟内的匹配邮件</p>
+    </div>
+    <div class="toolbar">
+      <span class="inline-status"><span class="status-dot"></span><span id="status">同步中</span></span>
+      <button id="refresh" type="button" class="secondary">刷新</button>
+    </div>
+  </header>
+  <section class="visitor-hero">
+    <span class="soft-icon" style="width:72px;height:72px">${MAIL_ICON3}</span>
+    <div>
+      <h1>当前共 <span id="email-count" class="visitor-count">0</span> 封匹配邮件</h1>
+      <p class="muted">最近同步 <span id="last-sync">--</span>，页面会自动刷新。</p>
+    </div>
+    <span class="soft-icon success" style="width:86px;height:86px">${SHIELD_ICON2}</span>
+  </section>
+  <main style="width:100%;margin:0">
+    <section>
+      <div class="card-header">
+        <div class="card-title"><p class="page-kicker">Matched Messages</p><h2>邮件列表</h2></div>
+        <span class="badge muted-badge">30 分钟窗口</span>
+      </div>
+      <div id="emails"></div>
+    </section>
+    <p class="muted" style="text-align:center;margin:18px 0">数据仅保留最近 30 分钟，自动刷新，保障访问隐私安全。</p>
+  </main>
+</div>`;
+function safeScriptString(value) {
+  return JSON.stringify(value).replaceAll("<", "\\u003c");
+}
+__name(safeScriptString, "safeScriptString");
 function visitorScript(token) {
   return `
-const token = "${token}";
+const token = ${safeScriptString(token)};
 const emails = document.querySelector("#emails");
 const statusEl = document.querySelector("#status");
+const countEl = document.querySelector("#email-count");
+const lastSyncEl = document.querySelector("#last-sync");
 document.querySelector("#refresh").addEventListener("click", loadEmails);
 
 function escapeText(value) {
@@ -7458,24 +7684,32 @@ async function loadEmails() {
   const data = await response.json();
   if (!response.ok) {
     statusEl.textContent = data.error || "\u94FE\u63A5\u4E0D\u53EF\u7528";
-    emails.innerHTML = "";
+    countEl.textContent = "0";
+    emails.innerHTML = '<div class="empty-state">\u94FE\u63A5\u4E0D\u53EF\u7528\u6216\u5DF2\u8FC7\u671F</div>';
     return;
   }
-  statusEl.textContent = new Date().toLocaleTimeString();
+  const syncTime = new Date().toLocaleTimeString();
+  statusEl.textContent = "\u5DF2\u540C\u6B65";
+  lastSyncEl.textContent = syncTime;
+  countEl.textContent = String(data.emails.length);
   if (data.emails.length === 0) {
-    emails.innerHTML = '<div class="span-12 muted">\u6682\u65E0\u5339\u914D\u90AE\u4EF6</div>';
+    emails.innerHTML = '<div class="empty-state">\u6682\u65E0\u5339\u914D\u90AE\u4EF6</div>';
     return;
   }
-  emails.innerHTML = data.emails.map((email) => {
-    const codes = email.codes.map((code) => '<span class="chip code">' + escapeText(code) + '</span>').join("");
-    return '<section class="span-12">' +
-      '<h3>' + escapeText(email.subject || "(\u65E0\u4E3B\u9898)") + '</h3>' +
-      '<div class="chips">' + codes + '</div>' +
-      '<p class="muted">' + escapeText(email.fromAddress || email.envelopeFrom) + ' \xB7 ' +
-        escapeText(new Date(email.receivedAt).toLocaleString()) + '</p>' +
-      '<pre>' + escapeText(email.body) + '</pre>' +
-    '</section>';
-  }).join("");
+  emails.innerHTML = data.emails.map((email) => renderEmail(email)).join("");
+}
+
+function renderEmail(email) {
+  const codes = email.codes.map((code) => '<span class="chip code">\u9A8C\u8BC1\u7801 ' + escapeText(code) + '</span>').join("");
+  return '<article class="card email-card">' +
+    '<span class="soft-icon">${SHIELD_ICON2}</span>' +
+    '<div><h3>' + escapeText(email.subject || "(\u65E0\u4E3B\u9898)") + '</h3>' +
+    '<p class="muted">\u53D1\u4EF6\u4EBA\uFF1A' + escapeText(email.fromAddress || email.envelopeFrom) + '</p></div>' +
+    '<div><div class="chips">' + (codes || '<span class="badge muted-badge">\u65E0\u9A8C\u8BC1\u7801</span>') + '</div>' +
+    '<p class="email-body-preview">' + escapeText(email.body) + '</p></div>' +
+    '<div class="inline-status"><span class="soft-icon" style="width:34px;height:34px">${CLOCK_ICON}</span><span>\u63A5\u6536\u65F6\u95F4<br>' +
+    escapeText(new Date(email.receivedAt).toLocaleTimeString()) + '</span></div>' +
+  '</article>';
 }
 
 loadEmails();
@@ -7486,7 +7720,9 @@ __name(visitorScript, "visitorScript");
 // src/routes/pages.ts
 function registerPageRoutes(app2) {
   app2.get("/", (c) => c.redirect("/admin"));
-  app2.get("/admin", (c) => c.html(adminPage()));
+  app2.get("/admin", (c) => c.html(adminPage("mail")));
+  app2.get("/admin/rules", (c) => c.html(adminPage("rules")));
+  app2.get("/admin/share-links", (c) => c.html(adminPage("share")));
   app2.get("/setup", (c) => c.html(setupPage()));
   app2.get("/v/:token", (c) => c.html(visitorPage(c.req.param("token"))));
 }
