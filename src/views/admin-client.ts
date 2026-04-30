@@ -14,9 +14,17 @@ const state = {
   currentQuery: "",
   emailPage: 1,
   emailPageSize: 50,
-  emailPagination: null
+  emailPagination: null,
+  ruleBuilder: null,
+  ruleBuilderBound: false,
+  ruleBuilderDragging: null,
+  ruleBuilderCounter: 0
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
+const RULE_FIELD_OPTIONS = ["from", "to", "subject", "text", "html", "code"];
+const RULE_OPERATOR_OPTIONS = ["contains", "exact", "startsWith", "endsWith", "regex"];
+const RULE_FIELD_LABELS = { from: "From", to: "To", subject: "Subject", text: "Text", html: "HTML", code: "Code" };
+const RULE_OPERATOR_LABELS = { contains: "包含", exact: "完全相等", startsWith: "开头匹配", endsWith: "结尾匹配", regex: "正则" };
 const currentPage = "__ADMIN_SECTION__";
 const authLoading = document.querySelector("#auth-loading");
 const loginSection = document.querySelector("#login-section");
@@ -82,12 +90,20 @@ on("#open-link-form", "click", () => openLinkForm());
 on("#upgrade-database", "click", () => upgradeDatabase());
 on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
+on("#rule-builder-add-condition", "click", () => addRuleBuilderChild("condition"));
+on("#rule-builder-add-group", "click", () => addRuleBuilderChild("group"));
+on("#rule-builder-quick-apply", "click", applyQuickRuleBuilderTemplate);
+on("#rule-builder-import", "click", importRuleBuilderJson);
+on("#rule-builder-copy-json", "click", copyRuleBuilderJson);
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
 });
 
 async function loadCurrentPage() {
-  if (currentPage === "rules") await loadRules();
+  if (currentPage === "rules") {
+    bindRuleBuilderEvents();
+    await loadRules();
+  }
   if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
   if (currentPage === "database") await loadDatabaseStatus();
   if (currentPage === "mail") {
@@ -388,9 +404,309 @@ async function deleteRuleItem(id) {
   await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
 function readRuleExpression(form, data) {
+  if (state.ruleBuilder) {
+    const expression = stripRuleBuilderMetadata(state.ruleBuilder);
+    if (isBuilderExpressionValid(expression)) return expression;
+    throw new Error("请完善可视化条件组中的字段和值");
+  }
   const json = String(data.get("expressionJson") || "").trim();
   if (json) return JSON.parse(json);
   return buildQuickRuleExpression(data);
+}
+function defaultRuleBuilderExpression() {
+  return hydrateRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
+}
+function hydrateRuleBuilderExpression(expression) {
+  const source = expression && typeof expression === "object" ? expression : { op: "condition", field: "subject", operator: "contains", value: "" };
+  const id = nextRuleBuilderId();
+  if (source.op === "and" || source.op === "or") {
+    const children = Array.isArray(source.children) && source.children.length ? source.children.map(hydrateRuleBuilderExpression) : [hydrateRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" })];
+    return { id, op: source.op, children };
+  }
+  if (source.op === "not") {
+    return { id, op: "not", child: hydrateRuleBuilderExpression(source.child) };
+  }
+  return {
+    id,
+    op: "condition",
+    field: RULE_FIELD_OPTIONS.includes(source.field) ? source.field : "subject",
+    operator: RULE_OPERATOR_OPTIONS.includes(source.operator) ? source.operator : "contains",
+    value: String(source.value || ""),
+    caseSensitive: Boolean(source.caseSensitive)
+  };
+}
+function nextRuleBuilderId() {
+  state.ruleBuilderCounter += 1;
+  return "rb-" + state.ruleBuilderCounter;
+}
+function setRuleBuilderExpression(expression) {
+  state.ruleBuilder = hydrateRuleBuilderExpression(expression);
+  renderRuleBuilder();
+}
+function stripRuleBuilderMetadata(node) {
+  if (!node) return null;
+  if (node.op === "condition") {
+    return { op: "condition", field: node.field, operator: node.operator, value: String(node.value || "").trim(), caseSensitive: Boolean(node.caseSensitive) };
+  }
+  if (node.op === "not") return { op: "not", child: stripRuleBuilderMetadata(node.child) };
+  return { op: node.op, children: (node.children || []).map(stripRuleBuilderMetadata).filter(Boolean) };
+}
+function isBuilderExpressionValid(expression) {
+  if (!expression || typeof expression !== "object") return false;
+  if (expression.op === "condition") return RULE_FIELD_OPTIONS.includes(expression.field) && RULE_OPERATOR_OPTIONS.includes(expression.operator) && String(expression.value || "").trim().length > 0;
+  if (expression.op === "not") return isBuilderExpressionValid(expression.child);
+  return (expression.op === "and" || expression.op === "or") && Array.isArray(expression.children) && expression.children.length > 0 && expression.children.every(isBuilderExpressionValid);
+}
+function renderRuleBuilder() {
+  const root = optional("#rule-builder-root");
+  if (!root) return;
+  if (!state.ruleBuilder) state.ruleBuilder = defaultRuleBuilderExpression();
+  root.innerHTML = renderRuleBuilderNode(state.ruleBuilder, null, 0, 0);
+  syncRuleBuilderJson();
+}
+function renderRuleBuilderNode(node, parentId, depth, index) {
+  const isGroup = node.op === "and" || node.op === "or";
+  const isNot = node.op === "not";
+  const typeLabel = isGroup ? (node.op === "and" ? "全部满足" : "任一满足") : isNot ? "NOT" : "条件";
+  const classes = "rule-node rule-node-" + node.op + (depth === 0 ? " root" : "");
+  const canMove = Boolean(parentId);
+  return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
+    '<div class="rule-node-header">' +
+      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动</button>' +
+      '<span class="badge muted-badge">' + escapeText(typeLabel) + '</span>' +
+      renderRuleNodeControls(node) +
+      '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
+    '</div>' + renderRuleNodeBody(node, depth) + '</div>';
+}
+function renderRuleNodeControls(node) {
+  if (node.op === "and" || node.op === "or") {
+    return '<select class="rule-inline-select" data-builder-op="' + escapeAttribute(node.id) + '" aria-label="条件组关系">' +
+      '<option value="and"' + (node.op === "and" ? " selected" : "") + '>AND 全部满足</option>' +
+      '<option value="or"' + (node.op === "or" ? " selected" : "") + '>OR 任一满足</option></select>';
+  }
+  if (node.op === "not") return '<span class="rule-node-hint">反向匹配子条件</span>';
+  return '<div class="rule-condition-grid">' +
+    '<label><span>字段</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></label>' +
+    '<label><span>方式</span><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></label>' +
+    '<label class="rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || "") + '" placeholder="输入关键词、地址、验证码或正则"></label>' +
+    '<label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? " checked" : "") + '> 区分大小写</label>' +
+  '</div>';
+}
+function renderRuleNodeActions(node, parentId, index, isGroup) {
+  const disabledRoot = parentId ? "" : " disabled";
+  return (isGroup ? '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(node.id) + '">条件</button><button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(node.id) + '">分组</button>' : '') +
+    '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + (node.op === "not" ? "取消 NOT" : "设为 NOT") + '</button>' +
+    '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>上移</button>' +
+    '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>下移</button>' +
+    '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '"' + disabledRoot + '>删除</button>';
+}
+function renderRuleNodeBody(node, depth) {
+  if (node.op === "condition") return "";
+  if (node.op === "not") return '<div class="rule-node-children">' + renderRuleBuilderNode(node.child, null, depth + 1, 0) + '</div>';
+  const children = node.children || [];
+  let html = '<div class="rule-node-children" data-builder-group="' + escapeAttribute(node.id) + '">';
+  children.forEach((child, index) => {
+    html += renderDropZone(node.id, index) + renderRuleBuilderNode(child, node.id, depth + 1, index);
+  });
+  html += renderDropZone(node.id, children.length) + '</div>';
+  return html;
+}
+function renderDropZone(parentId, index) {
+  return '<div class="rule-drop-zone" data-builder-drop-parent="' + escapeAttribute(parentId) + '" data-builder-drop-index="' + index + '" aria-label="拖放到此位置">拖放到这里</div>';
+}
+function ruleOptions(values, selected, labels) {
+  return values.map((value) => '<option value="' + escapeAttribute(value) + '"' + (value === selected ? " selected" : "") + '>' + escapeText(labels[value] || value) + '</option>').join("");
+}
+function bindRuleBuilderEvents() {
+  const root = optional("#rule-builder-root");
+  if (!root || state.ruleBuilderBound) return;
+  state.ruleBuilderBound = true;
+  root.addEventListener("input", handleRuleBuilderInput);
+  root.addEventListener("change", handleRuleBuilderInput);
+  root.addEventListener("click", handleRuleBuilderClick);
+  root.addEventListener("dragstart", handleRuleBuilderDragStart);
+  root.addEventListener("dragover", handleRuleBuilderDragOver);
+  root.addEventListener("dragleave", handleRuleBuilderDragLeave);
+  root.addEventListener("drop", handleRuleBuilderDrop);
+  root.addEventListener("dragend", clearRuleBuilderDropState);
+}
+function handleRuleBuilderInput(event) {
+  const target = event.target;
+  const id = target.dataset.builderField || target.dataset.builderOperator || target.dataset.builderValue || target.dataset.builderCase || target.dataset.builderOp;
+  if (!id) return;
+  const node = findRuleBuilderNode(state.ruleBuilder, id);
+  if (!node) return;
+  if (target.dataset.builderField) node.field = target.value;
+  if (target.dataset.builderOperator) node.operator = target.value;
+  if (target.dataset.builderValue) node.value = target.value;
+  if (target.dataset.builderCase) node.caseSensitive = target.checked;
+  if (target.dataset.builderOp && (target.value === "and" || target.value === "or")) node.op = target.value;
+  syncRuleBuilderJson();
+}
+function handleRuleBuilderClick(event) {
+  const target = event.target.closest("button");
+  if (!target) return;
+  if (target.dataset.builderAddCondition) addRuleBuilderChild("condition", target.dataset.builderAddCondition);
+  if (target.dataset.builderAddGroup) addRuleBuilderChild("group", target.dataset.builderAddGroup);
+  if (target.dataset.builderToggleNot) toggleRuleBuilderNot(target.dataset.builderToggleNot);
+  if (target.dataset.builderDelete) deleteRuleBuilderNode(target.dataset.builderDelete);
+  if (target.dataset.builderMove) moveRuleBuilderSibling(target.dataset.builderMoveId, target.dataset.builderMove);
+}
+function handleRuleBuilderDragStart(event) {
+  const handle = event.target.closest("[data-builder-drag-id]");
+  if (!handle) return;
+  state.ruleBuilderDragging = handle.dataset.builderDragId;
+  event.dataTransfer.setData("text/plain", state.ruleBuilderDragging);
+  event.dataTransfer.effectAllowed = "move";
+}
+function handleRuleBuilderDragOver(event) {
+  const zone = event.target.closest("[data-builder-drop-parent]");
+  if (!zone || !state.ruleBuilderDragging) return;
+  event.preventDefault();
+  zone.classList.add("active");
+  event.dataTransfer.dropEffect = "move";
+}
+function handleRuleBuilderDragLeave(event) {
+  const zone = event.target.closest("[data-builder-drop-parent]");
+  if (zone) zone.classList.remove("active");
+}
+function handleRuleBuilderDrop(event) {
+  const zone = event.target.closest("[data-builder-drop-parent]");
+  if (!zone) return;
+  event.preventDefault();
+  const sourceId = state.ruleBuilderDragging || event.dataTransfer.getData("text/plain");
+  moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
+  clearRuleBuilderDropState();
+}
+function clearRuleBuilderDropState() {
+  state.ruleBuilderDragging = null;
+  document.querySelectorAll(".rule-drop-zone.active").forEach((zone) => zone.classList.remove("active"));
+}
+function addRuleBuilderChild(kind, parentId) {
+  ensureRuleBuilderGroupRoot();
+  const parent = findRuleBuilderNode(state.ruleBuilder, parentId || state.ruleBuilder.id);
+  if (!parent || (parent.op !== "and" && parent.op !== "or")) return;
+  parent.children.push(kind === "group" ? hydrateRuleBuilderExpression({ op: "and", children: [{ op: "condition", field: "subject", operator: "contains", value: "" }] }) : hydrateRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" }));
+  renderRuleBuilder();
+}
+function ensureRuleBuilderGroupRoot() {
+  if (!state.ruleBuilder) state.ruleBuilder = defaultRuleBuilderExpression();
+  if (state.ruleBuilder.op !== "and" && state.ruleBuilder.op !== "or") {
+    state.ruleBuilder = { id: nextRuleBuilderId(), op: "and", children: [state.ruleBuilder] };
+  }
+}
+function toggleRuleBuilderNot(id) {
+  const node = findRuleBuilderNode(state.ruleBuilder, id);
+  if (!node) return;
+  if (node.op === "not") replaceRuleBuilderNode(id, node.child);
+  else replaceRuleBuilderNode(id, { id: nextRuleBuilderId(), op: "not", child: cloneRuleBuilderNode(node) });
+  renderRuleBuilder();
+}
+function deleteRuleBuilderNode(id) {
+  if (!id || state.ruleBuilder?.id === id) return;
+  detachRuleBuilderNode(state.ruleBuilder, id);
+  renderRuleBuilder();
+}
+function moveRuleBuilderSibling(id, direction) {
+  const found = findRuleBuilderParent(state.ruleBuilder, id);
+  if (!found || !Array.isArray(found.parent.children)) return;
+  const nextIndex = found.index + (direction === "up" ? -1 : 1);
+  if (nextIndex < 0 || nextIndex >= found.parent.children.length) return;
+  const list = found.parent.children;
+  const item = list.splice(found.index, 1)[0];
+  list.splice(nextIndex, 0, item);
+  renderRuleBuilder();
+}
+function moveRuleBuilderNode(sourceId, parentId, index) {
+  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return;
+  const oldParent = findRuleBuilderParent(state.ruleBuilder, sourceId);
+  const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
+  if (!detached) return;
+  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
+  if (!parent || (parent.op !== "and" && parent.op !== "or")) return;
+  let safeIndex = Math.max(0, Math.min(Number.isFinite(index) ? index : parent.children.length, parent.children.length));
+  if (oldParent && oldParent.parent.id === parent.id && oldParent.index < safeIndex) safeIndex -= 1;
+  parent.children.splice(safeIndex, 0, detached);
+  renderRuleBuilder();
+}
+function findRuleBuilderNode(node, id) {
+  if (!node || !id) return null;
+  if (node.id === id) return node;
+  if (node.op === "not") return findRuleBuilderNode(node.child, id);
+  if (node.children) {
+    for (const child of node.children) {
+      const found = findRuleBuilderNode(child, id);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+function findRuleBuilderParent(node, id) {
+  if (!node || !id) return null;
+  if (node.op === "not" && node.child?.id === id) return { parent: node, index: 0 };
+  if (node.children) {
+    const index = node.children.findIndex((child) => child.id === id);
+    if (index >= 0) return { parent: node, index };
+    for (const child of node.children) {
+      const found = findRuleBuilderParent(child, id);
+      if (found) return found;
+    }
+  }
+  if (node.op === "not") return findRuleBuilderParent(node.child, id);
+  return null;
+}
+function replaceRuleBuilderNode(id, replacement) {
+  if (state.ruleBuilder?.id === id) {
+    state.ruleBuilder = replacement;
+    return true;
+  }
+  const found = findRuleBuilderParent(state.ruleBuilder, id);
+  if (!found) return false;
+  if (found.parent.op === "not") found.parent.child = replacement;
+  else found.parent.children[found.index] = replacement;
+  return true;
+}
+function detachRuleBuilderNode(node, id) {
+  const found = findRuleBuilderParent(node, id);
+  if (!found || found.parent.op === "not") return null;
+  return found.parent.children.splice(found.index, 1)[0];
+}
+function isRuleBuilderDescendant(sourceId, possibleDescendantId) {
+  const source = findRuleBuilderNode(state.ruleBuilder, sourceId);
+  return Boolean(source && findRuleBuilderNode(source, possibleDescendantId));
+}
+function cloneRuleBuilderNode(node) {
+  return hydrateRuleBuilderExpression(stripRuleBuilderMetadata(node));
+}
+function syncRuleBuilderJson() {
+  const textarea = optional("#rule-expression-json");
+  if (!textarea || !state.ruleBuilder) return;
+  textarea.value = JSON.stringify(stripRuleBuilderMetadata(state.ruleBuilder), null, 2);
+}
+function importRuleBuilderJson() {
+  const textarea = optional("#rule-expression-json");
+  if (!textarea) return;
+  try {
+    setRuleBuilderExpression(JSON.parse(textarea.value));
+    optional("#rule-message").textContent = "已导入 JSON";
+  } catch (error) {
+    optional("#rule-message").textContent = "JSON 格式错误：" + error.message;
+  }
+}
+async function copyRuleBuilderJson() {
+  const textarea = optional("#rule-expression-json");
+  if (!textarea) return;
+  await copyShareText(textarea.value);
+}
+function applyQuickRuleBuilderTemplate() {
+  const form = optional("#rule-form");
+  if (!form) return;
+  try {
+    setRuleBuilderExpression(buildQuickRuleExpression(new FormData(form)));
+    optional("#rule-message").textContent = "已应用批量条件";
+  } catch (error) {
+    optional("#rule-message").textContent = error.message;
+  }
 }
 function buildQuickRuleExpression(data) {
   const keywords = splitRuleKeywords(data.get("keyword"));

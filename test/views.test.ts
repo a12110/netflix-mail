@@ -40,10 +40,17 @@ describe("view templates", () => {
 
     expect(rulesHtml).toContain('id="rule-form"');
     expect(rulesHtml).toContain('name="action"');
+    expect(rulesHtml).toContain('id="rule-builder-root"');
+    expect(rulesHtml).toContain('id="rule-builder-add-condition"');
+    expect(rulesHtml).toContain('id="rule-builder-add-group"');
+    expect(rulesHtml).toContain('id="rule-builder-quick-apply"');
+    expect(rulesHtml).toContain('id="rule-builder-import"');
     expect(rulesHtml).toContain('name="keywordLogic"');
     expect(rulesHtml).toContain('name="fieldLogic"');
     expect(rulesHtml).toContain('name="expressionJson"');
     expect(rulesHtml).toContain('高级表达式 JSON');
+    expect(rulesHtml).toContain('拖拽排序或移动到其他分组');
+    expect(rulesHtml).toContain("data-builder-drag-id");
     expect(rulesHtml).toContain('id="rules-table"');
     expect(rulesHtml).not.toContain('id="link-form"');
     expect(rulesHtml).not.toContain('id="search-form"');

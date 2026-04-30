@@ -1,19 +1,21 @@
-# Copilot Check：规则过滤器升级
+# Copilot Check：可视化规则条件组编辑器
 
 ## 评审结论
-通过。变更实现了分享链接绑定范围内的白名单/黑名单过滤，并支持高级表达式；旧规则字段和旧 payload 保持兼容。
+通过。规则管理已从高级 JSON 输入升级为可视化条件组编辑器，支持条件/分组/NOT、拖拽移动、按钮兜底、JSON 预览导入，并保持后端表达式协议不变。
 
 ## 检查项
-- 逻辑正确性：`evaluateRuleSet()` 明确执行“allow 命中且 block 未命中”规则，访客接口已切换到该决策函数。
-- 兼容性：保留 `keyword`、`fields_json`、`match_mode`、`case_sensitive`，旧规则在 `expression_json` 缺失时自动转换为表达式。
-- 数据库：新增 `0003_rule_expressions` 文件迁移，并同步 Worker 内置迁移；内置迁移按列存在性幂等执行。
-- 安全与性能：regex 保存时校验合法性并限制 200 字符；无效 regex 不进入运行时。
-- UI 易用性：管理端提供多关键词快速模式与高级 JSON 表达式；分享链接选择中按白名单/黑名单分组。
+- UI/UX：采用卡片式规则树，组节点与条件节点视觉层级清晰；所有点击控件均为原生 button/select/input，保留可见 focus 样式。
+- 拖拽交互：使用原生 HTML5 drag/drop，拖动 handle 独立于输入控件；drop zone 明确表示插入位置。
+- 无障碍兜底：除拖拽外提供上移/下移、添加条件、添加分组、删除、NOT 切换按钮，避免仅依赖鼠标拖拽。
+- 数据正确性：builder 内部 UI-only id 在保存前通过 `stripRuleBuilderMetadata()` 剥离；保存仍使用既有 RuleExpression JSON。
+- 兼容性：批量生成条件与 JSON 导入保留；编辑旧规则时会 hydrate 到可视化树并同步 JSON 预览。
+- 脚本风险：已用 `node --check` 抽取并检查内嵌 `ADMIN_SCRIPT` 语法。
 
 ## 验证
+- `yarn test test/views.test.ts`：通过。
 - `yarn run check`：通过，12 个测试文件 / 35 个测试。
 - `yarn build:gui`：退出码 0，已刷新 `dist-gui`；wrangler 在沙箱内写用户偏好日志触发 EPERM 警告，不影响 dry-run 产物。
 
 ## 已知风险
-- 高级表达式当前通过 JSON 输入完成，功能强但仍需要用户理解表达式结构；后续可继续增强为可视化条件组编辑器。
-- 分享链接更新时要求所选规则中至少有启用白名单；若旧链接只剩停用白名单，则编辑规则集合时会被拒绝，需要先启用/添加白名单。
+- 子线程 UI 复核两次超时无可验证输出，主线程已按失效机制关闭并继续本地静态/自动化验证。
+- 目前拖拽为 HTML5 drag/drop，移动端浏览器支持有限；已提供按钮兜底，后续如需移动端强拖拽可再做 pointer events 版本。
