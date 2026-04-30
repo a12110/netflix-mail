@@ -46,7 +46,7 @@ MAX_EMAIL_HEADERS_BYTES="200000"
 yarn dev
 ```
 
-打开 `/setup` 创建第一个管理员，然后进入 `/admin`。
+打开 `/setup` 创建第一个管理员，然后进入 `/admin`。前端页面采用内嵌 HTML/CSS/vanilla JS，无需单独构建前端资源。
 
 ## 部署
 
@@ -70,6 +70,16 @@ yarn deploy
 ```
 
 部署后在 Cloudflare Dashboard 的 Email Routing 中启用路由，并把目标地址绑定到这个 Worker。项目不会自动修改 Cloudflare Email Routing 设置。
+
+## 界面入口
+
+- `/setup`：初始化第一个管理员，完成前后台不可用。
+- `/admin`：管理员后台邮件中心。
+- `/admin/rules`：规则管理页。
+- `/admin/share-links`：分享链接页。
+- `/v/:token`：访客访问代码页，只展示最近 30 分钟内命中分享规则的邮件。
+
+界面风格为浅色企业后台，使用蓝色作为主操作色、绿色表示安全/成功状态；所有页面仍由同一个 Worker 输出。
 
 ## 规则与访客链接
 
