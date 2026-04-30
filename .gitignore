@@ -7,3 +7,6 @@ coverage/
 *.log
 .codex-tasks/
 UI/
+.DS_Store
+.vscode/
+.idea/
