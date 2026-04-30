@@ -1,6 +1,12 @@
 import PostalMime from "postal-mime";
 import type { Address, Attachment, Email, Mailbox } from "postal-mime";
-import { DEFAULT_EMAIL_LIMIT, DEFAULT_MAX_EMAIL_BODY_BYTES, DEFAULT_MAX_EMAIL_HEADERS_BYTES, MAX_EMAIL_LIMIT } from "../constants";
+import {
+  DEFAULT_EMAIL_LIMIT,
+  DEFAULT_MAX_EMAIL_BODY_BYTES,
+  DEFAULT_MAX_EMAIL_HEADERS_BYTES,
+  MAX_EMAIL_LIMIT,
+  MAX_EMAIL_PAGE
+} from "../constants";
 import type { EmailCodeRow, EmailRow, EmailSummary, Env } from "../types";
 import { extractCodes, insertCodes, type CodeCandidate } from "./codes";
 import {
@@ -34,6 +40,21 @@ export interface AttachmentMeta {
 interface EmailListOptions {
   q?: string | null;
   limit?: number;
+  offset?: number;
+}
+
+export interface EmailPagination {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+  hasPreviousPage: boolean;
+  hasNextPage: boolean;
+}
+
+export interface EmailPage {
+  emails: EmailSummary[];
+  pagination: EmailPagination;
 }
 
 export async function storeInboundEmail(message: ForwardableEmailMessage, env: Env): Promise<number> {
@@ -81,29 +102,50 @@ export async function storeInboundEmail(message: ForwardableEmailMessage, env: E
 
 export async function listEmails(db: D1Database, options: EmailListOptions = {}): Promise<EmailSummary[]> {
   const limit = clampLimit(options.limit);
-  const params: Array<string | number> = [];
-  const where: string[] = [];
-  const q = safeLikePattern(options.q);
-  if (q) {
-    where.push(
-      "(e.subject LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\' OR e.envelope_to LIKE ? ESCAPE '\\')"
-    );
-    params.push(q, q, q);
-  }
-  params.push(limit);
-  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const offset = clampOffset(options.offset);
+  const filter = emailSearchFilter(options.q);
   const result = await db
     .prepare(
       `SELECT e.*,
         (SELECT group_concat(code, ', ') FROM email_codes WHERE email_id = e.id) AS codes
        FROM emails e
-       ${whereSql}
+       ${filter.whereSql}
        ORDER BY e.received_at DESC
-       LIMIT ?`
+       LIMIT ? OFFSET ?`
     )
-    .bind(...params)
+    .bind(...filter.params, limit, offset)
     .all<EmailSummary>();
   return result.results;
+}
+
+export async function listEmailPage(
+  db: D1Database,
+  options: EmailListOptions & { page?: number } = {}
+): Promise<EmailPage> {
+  const pageSize = clampLimit(options.limit);
+  const total = await countEmails(db, options.q);
+  const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+  const page = normalizePage(options.page, totalPages);
+  const offset = (page - 1) * pageSize;
+  const emails = await listEmails(db, { q: options.q, limit: pageSize, offset });
+  return {
+    emails,
+    pagination: {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasPreviousPage: totalPages > 0 && page > 1,
+      hasNextPage: totalPages > 0 && page < totalPages
+    }
+  };
+}
+
+export async function countEmails(db: D1Database, q?: string | null): Promise<number> {
+  const filter = emailSearchFilter(q);
+  const statement = db.prepare(`SELECT COUNT(*) AS count FROM emails e ${filter.whereSql}`);
+  const row = await bindSearchParams(statement, filter.params).first<{ count: number }>();
+  return Number(row?.count ?? 0);
 }
 
 export async function getEmailDetail(db: D1Database, id: number): Promise<EmailDetail | null> {
@@ -164,6 +206,33 @@ function clampLimit(value: number | undefined): number {
     return DEFAULT_EMAIL_LIMIT;
   }
   return Math.min(MAX_EMAIL_LIMIT, Math.max(1, Math.floor(parsed)));
+}
+
+function clampOffset(value: number | undefined): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+
+function normalizePage(value: number | undefined, totalPages: number): number {
+  const parsed = Number(value);
+  const requested = Number.isFinite(parsed) ? Math.floor(parsed) : 1;
+  const page = Math.min(MAX_EMAIL_PAGE, Math.max(1, requested));
+  return totalPages > 0 ? Math.min(page, totalPages) : 1;
+}
+
+function emailSearchFilter(q: string | null | undefined): { whereSql: string; params: string[] } {
+  const pattern = safeLikePattern(q);
+  if (!pattern) {
+    return { whereSql: "", params: [] };
+  }
+  return {
+    whereSql: "WHERE (e.subject LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\' OR e.envelope_to LIKE ? ESCAPE '\\')",
+    params: [pattern, pattern, pattern]
+  };
+}
+
+function bindSearchParams(statement: D1PreparedStatement, params: string[]): D1PreparedStatement {
+  return params.length > 0 ? statement.bind(...params) : statement;
 }
 
 function safeLikePattern(value: string | null | undefined): string | null {

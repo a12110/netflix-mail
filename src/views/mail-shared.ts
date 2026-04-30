@@ -14,6 +14,51 @@ function on(selector, eventName, handler) {
   const element = optional(selector);
   if (element) element.addEventListener(eventName, handler);
 }
+function createMailRefreshController(options) {
+  const input = optional(options.inputSelector);
+  const label = optional(options.labelSelector);
+  const intervalSeconds = Math.max(5, Number(options.intervalSeconds) || 60);
+  let enabled = input ? input.checked !== false : true;
+  let remaining = intervalSeconds;
+  let loading = false;
+  const updateLabel = () => {
+    if (label) label.textContent = enabled ? remaining + "秒后刷新" : "自动刷新已关闭";
+  };
+  const reset = () => {
+    remaining = intervalSeconds;
+    updateLabel();
+  };
+  async function refreshNow() {
+    if (loading) return;
+    loading = true;
+    try {
+      await options.refresh();
+    } finally {
+      loading = false;
+      reset();
+    }
+  }
+  function setEnabled(nextEnabled) {
+    enabled = Boolean(nextEnabled);
+    if (input) input.checked = enabled;
+    reset();
+  }
+  const timerId = setInterval(() => {
+    if (!enabled || loading) return;
+    remaining -= 1;
+    if (remaining <= 0) refreshNow();
+    else updateLabel();
+  }, 1000);
+  if (input) input.addEventListener("change", () => setEnabled(input.checked));
+  setEnabled(enabled);
+  return { refreshNow, setEnabled, reset, stop: () => clearInterval(timerId) };
+}
+function mailPageNumberItems(currentPage, totalPages) {
+  if (totalPages <= 10) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  if (currentPage <= 4) return [1, 2, 3, 4, "ellipsis", totalPages - 2, totalPages - 1, totalPages];
+  if (currentPage >= totalPages - 3) return [1, 2, 3, "ellipsis", totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  return [1, 2, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages - 1, totalPages];
+}
 function normalizeCodes(codes) {
   if (Array.isArray(codes)) return codes.map((code) => typeof code === "string" ? code : code?.code).filter(Boolean);
   if (typeof codes === "string") return codes.split(",").map((code) => code.trim()).filter(Boolean);

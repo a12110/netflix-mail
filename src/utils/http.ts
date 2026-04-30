@@ -25,8 +25,12 @@ export function notFound(c: Context<AppEnv>, message = "Not found"): Response {
   return c.json({ ok: false, error: message }, 404);
 }
 
-export function clampNumber(value: string | null, fallback: number, min: number, max: number): number {
-  const parsed = Number(value);
+export function clampNumber(value: string | null | undefined, fallback: number, min: number, max: number): number {
+  const normalized = typeof value === "string" ? value.trim() : value;
+  if (normalized == null || normalized === "") {
+    return fallback;
+  }
+  const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) {
     return fallback;
   }

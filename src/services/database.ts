@@ -8,10 +8,14 @@ export interface DatabaseMigrationStatus {
 export interface DatabaseUpgradeResult {
   migrations: DatabaseMigrationStatus[];
   appliedMigrations: string[];
+  currentDatabaseVersion: string;
+  requiredDatabaseVersion: string;
+  needsUpgrade: boolean;
 }
 
 interface DatabaseMigration {
   id: string;
+  version: string;
   description: string;
   sql: string;
 }
@@ -133,9 +137,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token);
 `;
 
 export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
-  { id: "0001_initial", description: "初始化核心表、索引与访问日志", sql: INITIAL_SCHEMA_SQL },
-  { id: "0002_share_link_token", description: "保存分享链接 token 以便后台重新复制", sql: SHARE_LINK_TOKEN_SQL }
+  { id: "0001_initial", version: "v0.0.1", description: "初始化核心表、索引与访问日志", sql: INITIAL_SCHEMA_SQL },
+  { id: "0002_share_link_token", version: "v0.0.2", description: "保存分享链接 token 以便后台重新复制", sql: SHARE_LINK_TOKEN_SQL }
 ];
+
+const UNINITIALIZED_DATABASE_VERSION = "未初始化";
 
 export async function ensureDatabaseSchema(db: D1Database): Promise<DatabaseUpgradeResult> {
   return await applyPendingDatabaseMigrations(db);
@@ -143,7 +149,7 @@ export async function ensureDatabaseSchema(db: D1Database): Promise<DatabaseUpgr
 
 export async function getDatabaseStatus(db: D1Database): Promise<DatabaseUpgradeResult> {
   await ensureMigrationTable(db);
-  return { migrations: await listMigrationStatus(db), appliedMigrations: [] };
+  return await buildDatabaseResult(db, await listMigrationStatus(db), []);
 }
 
 export async function applyPendingDatabaseMigrations(db: D1Database): Promise<DatabaseUpgradeResult> {
@@ -157,7 +163,45 @@ export async function applyPendingDatabaseMigrations(db: D1Database): Promise<Da
     applied.add(migration.id);
     appliedMigrations.push(migration.id);
   }
-  return { migrations: await listMigrationStatus(db), appliedMigrations };
+  return await buildDatabaseResult(db, await listMigrationStatus(db), appliedMigrations);
+}
+
+async function buildDatabaseResult(
+  db: D1Database,
+  migrations: DatabaseMigrationStatus[],
+  appliedMigrations: string[]
+): Promise<DatabaseUpgradeResult> {
+  const currentDatabaseVersion = await currentVersionFromSchema(db, migrations);
+  const requiredDatabaseVersion = DATABASE_MIGRATIONS.at(-1)?.version ?? UNINITIALIZED_DATABASE_VERSION;
+  return {
+    migrations,
+    appliedMigrations,
+    currentDatabaseVersion,
+    requiredDatabaseVersion,
+    needsUpgrade: currentDatabaseVersion !== requiredDatabaseVersion
+  };
+}
+
+async function currentVersionFromSchema(db: D1Database, migrations: DatabaseMigrationStatus[]): Promise<string> {
+  if (await columnExists(db, "share_links", "token")) {
+    return migrationVersion("0002_share_link_token");
+  }
+  if (await tableExists(db, "share_links")) {
+    return migrationVersion("0001_initial");
+  }
+  return currentVersionFromMigrations(migrations);
+}
+
+function currentVersionFromMigrations(migrations: DatabaseMigrationStatus[]): string {
+  const latestApplied = [...migrations].reverse().find((migration) => migration.applied);
+  if (!latestApplied) {
+    return UNINITIALIZED_DATABASE_VERSION;
+  }
+  return migrationVersion(latestApplied.id);
+}
+
+function migrationVersion(id: string): string {
+  return DATABASE_MIGRATIONS.find((migration) => migration.id === id)?.version ?? id;
 }
 
 async function applyMigration(db: D1Database, migration: DatabaseMigration): Promise<void> {
@@ -208,6 +252,11 @@ async function markMigrationApplied(db: D1Database, migration: DatabaseMigration
 async function columnExists(db: D1Database, table: string, column: string): Promise<boolean> {
   const result = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
   return result.results.some((row) => row.name === column);
+}
+
+async function tableExists(db: D1Database, table: string): Promise<boolean> {
+  const row = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").bind(table).first<{ name: string }>();
+  return Boolean(row);
 }
 
 async function runSqlStatements(db: D1Database, sql: string): Promise<void> {

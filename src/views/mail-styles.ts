@@ -28,9 +28,10 @@ export const MAIL_STYLES = String.raw`
 }
 .mail-viewer-topbar button,
 .mail-viewer-controls button,
+.mail-refresh-actions button,
 .mail-action-row button,
 .mail-detail-nav button {
-  min-height: 32px;
+  min-height: 36px;
   border-color: var(--line-strong);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -50,11 +51,76 @@ export const MAIL_STYLES = String.raw`
   align-items: center;
   margin: 0 0 10px;
 }
+.mail-refresh-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  line-height: 1;
+}
+.toolbar > .mail-refresh-actions { min-width: fit-content; }
+.mail-auto-refresh-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid #cfe3ff;
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.mail-auto-refresh-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.mail-auto-refresh-control:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(11, 116, 222, 0.12);
+}
+.mail-auto-refresh-switch {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 180ms ease;
+}
+.mail-auto-refresh-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+  transition: transform 180ms ease;
+}
+.mail-auto-refresh-control input:checked + .mail-auto-refresh-switch {
+  background: var(--primary);
+}
+.mail-auto-refresh-control input:checked + .mail-auto-refresh-switch::after {
+  transform: translateX(12px);
+}
 .mail-control-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  min-height: 36px;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   background: var(--primary-soft);
@@ -63,14 +129,73 @@ export const MAIL_STYLES = String.raw`
   font-weight: 700;
 }
 .mail-control-chip strong { color: var(--primary); }
+.mail-control-chip .visitor-count {
+  font-size: inherit;
+  line-height: 1;
+}
+.mail-pagination-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.mail-pagination-controls label,
+.mail-page-indicator,
+.mail-page-numbers {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  margin: 0;
+  color: var(--muted-strong);
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+.mail-page-numbers { gap: 4px; }
+.mail-page-number {
+  min-width: 36px;
+  padding-inline: 10px;
+}
+.mail-page-number.active {
+  background: var(--primary-soft);
+  border-color: #bfdbfe;
+  color: var(--primary-dark);
+  box-shadow: none;
+}
+.mail-page-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--muted);
+  font-weight: 800;
+  padding: 0 2px;
+}
+.mail-pagination-controls select {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  background: #fff;
+  color: var(--text);
+}
+.mail-viewer-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .mail-viewer-grid {
   display: grid;
   grid-template-columns: minmax(290px, 380px) minmax(0, 1fr);
   min-height: min(780px, calc(100vh - 220px));
   border-top: 1px solid var(--line);
+  align-items: stretch;
 }
 .mail-list-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--line);
   background: var(--surface-solid);
 }
@@ -86,7 +211,9 @@ export const MAIL_STYLES = String.raw`
 .mail-list {
   display: grid;
   align-content: start;
-  max-height: min(730px, calc(100vh - 260px));
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
   overflow: auto;
 }
 button.mail-list-item {

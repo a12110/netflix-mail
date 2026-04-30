@@ -93,10 +93,30 @@ function mailSection(): string {
     <button type="submit">查询</button>
   </form>
   <div class="mail-viewer-controls">
-    <button id="reload-emails" type="button" class="secondary">刷新</button>
-    <span class="mail-control-chip">当前列表 <strong id="metric-total">0</strong></span>
+    <div class="mail-refresh-actions" aria-label="邮件刷新控制">
+      <label class="mail-auto-refresh-control" for="admin-auto-refresh-toggle">
+        <span id="admin-auto-refresh-label">60秒后刷新</span>
+        <input id="admin-auto-refresh-toggle" type="checkbox" checked aria-label="自动刷新邮件">
+        <span class="mail-auto-refresh-switch" aria-hidden="true"></span>
+      </label>
+      <button id="reload-emails" type="button" class="secondary">刷新</button>
+    </div>
+    <span class="mail-control-chip">本页 <strong id="metric-page-count">0</strong></span>
+    <span class="mail-control-chip">总结果 <strong id="metric-total">0</strong></span>
     <span class="mail-control-chip">命中邮件 <strong id="metric-codes">0</strong></span>
-    <span class="mail-control-chip">最近收件 <strong id="metric-recent">--</strong></span>
+    <div class="mail-pagination-controls" aria-label="邮件分页">
+      <button id="email-page-prev" type="button" class="secondary">上一页</button>
+      <span class="mail-page-indicator">第 <strong id="metric-current-page">0</strong> / <strong id="metric-total-pages">0</strong> 页</span>
+      <div id="email-page-numbers" class="mail-page-numbers" aria-label="邮件页码"></div>
+      <label>每页
+        <select id="email-page-size" aria-label="每页邮件数量">
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <button id="email-page-next" type="button" class="secondary">下一页</button>
+    </div>
   </div>
   <div class="mail-viewer-grid">
     <aside class="mail-list-panel" aria-label="邮件列表">
@@ -136,8 +156,8 @@ function shareSection(): string {
 function databaseSection(): string {
   return String.raw`<section id="database-center">
   <div class="card-header">
-    <div class="card-title"><p class="page-kicker">Database</p><h1>数据库管理</h1><p class="muted">更新 Worker JS 后，可在这里执行内置 D1 建表与升级语句。</p></div>
-    <button id="upgrade-database" type="button">升级数据库</button>
+    <div class="card-title"><p class="page-kicker">Database</p><h1>数据库管理</h1><p class="muted">更新 Worker JS 后，可在这里检查并升级数据库版本。</p></div>
+    <button id="upgrade-database" class="hidden" type="button">升级数据库</button>
   </div>
   <div id="database-message" class="muted" style="margin-bottom:12px"></div>
   <div id="database-status"></div>

@@ -15,6 +15,12 @@ describe("view templates", () => {
       'id="search-form"',
       'id="emails-table"',
       'id="email-detail"',
+      'id="admin-auto-refresh-toggle"',
+      'id="admin-auto-refresh-label"',
+      'id="email-page-prev"',
+      'id="email-page-next"',
+      'id="email-page-numbers"',
+      'id="email-page-size"',
       'href="/admin/rules"',
       'href="/admin/share-links"',
       'href="/admin/database"',
@@ -40,11 +46,13 @@ describe("view templates", () => {
     expect(shareHtml).toContain('id="link-form"');
     expect(shareHtml).toContain('id="links-table"');
     expect(shareHtml).toContain('id="share-rules"');
+    expect(shareHtml).toContain("data-reset-link");
     expect(shareHtml).not.toContain('id="rule-form"');
     expect(shareHtml).not.toContain('id="search-form"');
 
     expect(databaseHtml).toContain('id="database-status"');
     expect(databaseHtml).toContain('id="upgrade-database"');
+    expect(databaseHtml).toContain("当前数据库版本");
     expect(databaseHtml).not.toContain('id="rule-form"');
     expect(databaseHtml).not.toContain('id="link-form"');
     expect(databaseHtml).not.toContain('id="search-form"');
@@ -63,8 +71,15 @@ describe("view templates", () => {
 
     expect(html).toContain('id="emails"');
     expect(html).toContain('id="refresh"');
+    expect(html).toContain('id="visitor-auto-refresh-toggle"');
+    expect(html).toContain('id="visitor-auto-refresh-label"');
+    expect(html).toContain('id="visitor-page-prev"');
+    expect(html).toContain('id="visitor-page-next"');
+    expect(html).toContain('id="visitor-page-numbers"');
+    expect(html).toContain('id="visitor-page-size"');
     expect(html).toContain('id="status"');
     expect(html).toContain('class="mail-frame"');
+    expect(html).toContain("createMailRefreshController");
     expect(html).toContain("data-load-remote-mail");
     expect(html).toContain("trustedAuthentication");
     expect(html).toContain("code-label");

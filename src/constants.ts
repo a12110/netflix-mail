@@ -9,5 +9,6 @@ export const DEFAULT_MAX_EMAIL_HEADERS_BYTES = 200_000;
 export const CONTENT_CHUNK_BYTES = 500_000;
 export const DEFAULT_EMAIL_LIMIT = 50;
 export const MAX_EMAIL_LIMIT = 100;
+export const MAX_EMAIL_PAGE = 10_000;
 
 export const RULE_FIELDS = ["from", "to", "subject", "text", "html", "code"] as const;

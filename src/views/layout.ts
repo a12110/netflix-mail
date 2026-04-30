@@ -275,6 +275,22 @@ pre {
   color: #166534;
 }
 .generated-link span { min-width: 0; overflow-wrap: anywhere; }
+.database-version-line {
+  display: inline-block;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 246, 255, 0.86);
+  color: #1e40af;
+  font-weight: 750;
+}
+.database-version-line strong { color: var(--primary-dark); }
+.database-version-line.warning {
+  border-color: #fed7aa;
+  background: var(--warning-soft);
+  color: #9a3412;
+}
+.database-version-line.warning strong { color: #9a3412; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .metric-card { gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 850; letter-spacing: -0.04em; margin-top: 4px; }

@@ -2108,6 +2108,7 @@ var DEFAULT_MAX_EMAIL_HEADERS_BYTES = 2e5;
 var CONTENT_CHUNK_BYTES = 5e5;
 var DEFAULT_EMAIL_LIMIT = 50;
 var MAX_EMAIL_LIMIT = 100;
+var MAX_EMAIL_PAGE = 1e4;
 var RULE_FIELDS = ["from", "to", "subject", "text", "html", "code"];
 
 // src/utils/encoding.ts
@@ -2433,16 +2434,17 @@ ALTER TABLE share_links ADD COLUMN token TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_share_links_token ON share_links(token);
 `;
 var DATABASE_MIGRATIONS = [
-  { id: "0001_initial", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
-  { id: "0002_share_link_token", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL }
+  { id: "0001_initial", version: "v0.0.1", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
+  { id: "0002_share_link_token", version: "v0.0.2", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL }
 ];
+var UNINITIALIZED_DATABASE_VERSION = "\u672A\u521D\u59CB\u5316";
 async function ensureDatabaseSchema(db) {
   return await applyPendingDatabaseMigrations(db);
 }
 __name(ensureDatabaseSchema, "ensureDatabaseSchema");
 async function getDatabaseStatus(db) {
   await ensureMigrationTable(db);
-  return { migrations: await listMigrationStatus(db), appliedMigrations: [] };
+  return await buildDatabaseResult(db, await listMigrationStatus(db), []);
 }
 __name(getDatabaseStatus, "getDatabaseStatus");
 async function applyPendingDatabaseMigrations(db) {
@@ -2456,9 +2458,43 @@ async function applyPendingDatabaseMigrations(db) {
     applied.add(migration.id);
     appliedMigrations.push(migration.id);
   }
-  return { migrations: await listMigrationStatus(db), appliedMigrations };
+  return await buildDatabaseResult(db, await listMigrationStatus(db), appliedMigrations);
 }
 __name(applyPendingDatabaseMigrations, "applyPendingDatabaseMigrations");
+async function buildDatabaseResult(db, migrations, appliedMigrations) {
+  const currentDatabaseVersion = await currentVersionFromSchema(db, migrations);
+  const requiredDatabaseVersion = DATABASE_MIGRATIONS.at(-1)?.version ?? UNINITIALIZED_DATABASE_VERSION;
+  return {
+    migrations,
+    appliedMigrations,
+    currentDatabaseVersion,
+    requiredDatabaseVersion,
+    needsUpgrade: currentDatabaseVersion !== requiredDatabaseVersion
+  };
+}
+__name(buildDatabaseResult, "buildDatabaseResult");
+async function currentVersionFromSchema(db, migrations) {
+  if (await columnExists(db, "share_links", "token")) {
+    return migrationVersion("0002_share_link_token");
+  }
+  if (await tableExists(db, "share_links")) {
+    return migrationVersion("0001_initial");
+  }
+  return currentVersionFromMigrations(migrations);
+}
+__name(currentVersionFromSchema, "currentVersionFromSchema");
+function currentVersionFromMigrations(migrations) {
+  const latestApplied = [...migrations].reverse().find((migration) => migration.applied);
+  if (!latestApplied) {
+    return UNINITIALIZED_DATABASE_VERSION;
+  }
+  return migrationVersion(latestApplied.id);
+}
+__name(currentVersionFromMigrations, "currentVersionFromMigrations");
+function migrationVersion(id) {
+  return DATABASE_MIGRATIONS.find((migration) => migration.id === id)?.version ?? id;
+}
+__name(migrationVersion, "migrationVersion");
 async function applyMigration(db, migration) {
   if (migration.id === "0002_share_link_token") {
     await applyShareLinkTokenMigration(db);
@@ -2506,6 +2542,11 @@ async function columnExists(db, table, column) {
   return result.results.some((row) => row.name === column);
 }
 __name(columnExists, "columnExists");
+async function tableExists(db, table) {
+  const row = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").bind(table).first();
+  return Boolean(row);
+}
+__name(tableExists, "tableExists");
 async function runSqlStatements(db, sql) {
   for (const statement of splitSqlStatements(sql)) {
     await db.prepare(statement).run();
@@ -6696,28 +6737,46 @@ async function storeInboundEmail(message, env) {
 __name(storeInboundEmail, "storeInboundEmail");
 async function listEmails(db, options = {}) {
   const limit = clampLimit(options.limit);
-  const params = [];
-  const where = [];
-  const q = safeLikePattern(options.q);
-  if (q) {
-    where.push(
-      "(e.subject LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\' OR e.envelope_to LIKE ? ESCAPE '\\')"
-    );
-    params.push(q, q, q);
-  }
-  params.push(limit);
-  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : "";
+  const offset = clampOffset(options.offset);
+  const filter = emailSearchFilter(options.q);
   const result = await db.prepare(
     `SELECT e.*,
         (SELECT group_concat(code, ', ') FROM email_codes WHERE email_id = e.id) AS codes
        FROM emails e
-       ${whereSql}
+       ${filter.whereSql}
        ORDER BY e.received_at DESC
-       LIMIT ?`
-  ).bind(...params).all();
+       LIMIT ? OFFSET ?`
+  ).bind(...filter.params, limit, offset).all();
   return result.results;
 }
 __name(listEmails, "listEmails");
+async function listEmailPage(db, options = {}) {
+  const pageSize = clampLimit(options.limit);
+  const total = await countEmails(db, options.q);
+  const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+  const page2 = normalizePage(options.page, totalPages);
+  const offset = (page2 - 1) * pageSize;
+  const emails = await listEmails(db, { q: options.q, limit: pageSize, offset });
+  return {
+    emails,
+    pagination: {
+      page: page2,
+      pageSize,
+      total,
+      totalPages,
+      hasPreviousPage: totalPages > 0 && page2 > 1,
+      hasNextPage: totalPages > 0 && page2 < totalPages
+    }
+  };
+}
+__name(listEmailPage, "listEmailPage");
+async function countEmails(db, q) {
+  const filter = emailSearchFilter(q);
+  const statement = db.prepare(`SELECT COUNT(*) AS count FROM emails e ${filter.whereSql}`);
+  const row = await bindSearchParams(statement, filter.params).first();
+  return Number(row?.count ?? 0);
+}
+__name(countEmails, "countEmails");
 async function getEmailDetail(db, id) {
   const row = await db.prepare("SELECT * FROM emails WHERE id = ?1").bind(id).first();
   if (!row) {
@@ -6771,6 +6830,33 @@ function clampLimit(value) {
   return Math.min(MAX_EMAIL_LIMIT, Math.max(1, Math.floor(parsed)));
 }
 __name(clampLimit, "clampLimit");
+function clampOffset(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : 0;
+}
+__name(clampOffset, "clampOffset");
+function normalizePage(value, totalPages) {
+  const parsed = Number(value);
+  const requested = Number.isFinite(parsed) ? Math.floor(parsed) : 1;
+  const page2 = Math.min(MAX_EMAIL_PAGE, Math.max(1, requested));
+  return totalPages > 0 ? Math.min(page2, totalPages) : 1;
+}
+__name(normalizePage, "normalizePage");
+function emailSearchFilter(q) {
+  const pattern = safeLikePattern(q);
+  if (!pattern) {
+    return { whereSql: "", params: [] };
+  }
+  return {
+    whereSql: "WHERE (e.subject LIKE ? ESCAPE '\\' OR e.from_address LIKE ? ESCAPE '\\' OR e.envelope_to LIKE ? ESCAPE '\\')",
+    params: [pattern, pattern, pattern]
+  };
+}
+__name(emailSearchFilter, "emailSearchFilter");
+function bindSearchParams(statement, params) {
+  return params.length > 0 ? statement.bind(...params) : statement;
+}
+__name(bindSearchParams, "bindSearchParams");
 function safeLikePattern(value) {
   const trimmed = value?.trim();
   if (!trimmed) {
@@ -7031,6 +7117,13 @@ async function updateShareLink(db, id, input) {
   }
 }
 __name(updateShareLink, "updateShareLink");
+async function resetShareLinkToken(db, id) {
+  const token = randomToken();
+  const tokenHash = await hashShareToken(token);
+  await db.prepare("UPDATE share_links SET token = ?1, token_hash = ?2 WHERE id = ?3").bind(token, tokenHash, id).run();
+  return token;
+}
+__name(resetShareLinkToken, "resetShareLinkToken");
 async function deleteShareLink(db, id) {
   await db.prepare("DELETE FROM share_links WHERE id = ?1").bind(id).run();
 }
@@ -7101,7 +7194,11 @@ function notFound(c, message = "Not found") {
 }
 __name(notFound, "notFound");
 function clampNumber(value, fallback, min, max) {
-  const parsed = Number(value);
+  const normalized = typeof value === "string" ? value.trim() : value;
+  if (normalized == null || normalized === "") {
+    return fallback;
+  }
+  const parsed = Number(normalized);
   if (!Number.isFinite(parsed)) {
     return fallback;
   }
@@ -7131,6 +7228,7 @@ function registerAdminRoutes(app2) {
   app2.get("/api/admin/share-links", async (c) => withAdmin(c, () => adminListShareLinks(c)));
   app2.post("/api/admin/share-links", async (c) => withAdmin(c, (admin) => adminCreateShareLink(c, admin)));
   app2.patch("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminUpdateShareLink(c)));
+  app2.post("/api/admin/share-links/:id/reset", async (c) => withAdmin(c, (admin) => adminResetShareLink(c, admin)));
   app2.delete("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminDeleteShareLink(c)));
   app2.get("/api/admin/database/status", async (c) => withAdmin(c, () => adminDatabaseStatus(c)));
   app2.post("/api/admin/database/upgrade", async (c) => withAdmin(c, () => adminUpgradeDatabase(c)));
@@ -7188,9 +7286,11 @@ async function withAdmin(c, handler) {
 }
 __name(withAdmin, "withAdmin");
 async function adminListEmails(c) {
-  const limit = clampNumber(c.req.query("limit") ?? null, 50, 1, 100);
-  const emails = await listEmails(c.env.DB, { q: c.req.query("q"), limit });
-  return c.json({ ok: true, emails });
+  const page2 = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
+  const pageSizeParam = c.req.query("pageSize") ?? c.req.query("limit");
+  const pageSize = clampNumber(pageSizeParam, DEFAULT_EMAIL_LIMIT, 1, MAX_EMAIL_LIMIT);
+  const result = await listEmailPage(c.env.DB, { q: c.req.query("q"), page: page2, limit: pageSize });
+  return c.json({ ok: true, emails: result.emails, pagination: result.pagination });
 }
 __name(adminListEmails, "adminListEmails");
 async function adminEmailDetail(c) {
@@ -7296,6 +7396,22 @@ async function adminDeleteShareLink(c) {
   return c.json({ ok: true });
 }
 __name(adminDeleteShareLink, "adminDeleteShareLink");
+async function adminResetShareLink(c, admin) {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid share link id.");
+  }
+  const token = await resetShareLinkToken(c.env.DB, id);
+  const url = new URL(`/v/${token}`, c.req.url).toString();
+  await writeAccessLog(c.env.DB, {
+    actorType: "admin",
+    actorId: admin.id,
+    action: `share_link.reset:${id}`,
+    request: c.req.raw
+  });
+  return c.json({ ok: true, id, token, url });
+}
+__name(adminResetShareLink, "adminResetShareLink");
 async function adminDatabaseStatus(c) {
   return c.json({ ok: true, ...await getDatabaseStatus(c.env.DB) });
 }
@@ -7394,9 +7510,10 @@ var MAIL_STYLES = String.raw`
 }
 .mail-viewer-topbar button,
 .mail-viewer-controls button,
+.mail-refresh-actions button,
 .mail-action-row button,
 .mail-detail-nav button {
-  min-height: 32px;
+  min-height: 36px;
   border-color: var(--line-strong);
   border-radius: var(--radius-sm);
   background: #fff;
@@ -7416,11 +7533,76 @@ var MAIL_STYLES = String.raw`
   align-items: center;
   margin: 0 0 10px;
 }
+.mail-refresh-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  line-height: 1;
+}
+.toolbar > .mail-refresh-actions { min-width: fit-content; }
+.mail-auto-refresh-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid #cfe3ff;
+  border-radius: var(--radius-sm);
+  background: var(--primary-soft);
+  color: var(--primary-dark);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.mail-auto-refresh-control input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+.mail-auto-refresh-control:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(11, 116, 222, 0.12);
+}
+.mail-auto-refresh-switch {
+  position: relative;
+  width: 32px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--line-strong);
+  transition: background 180ms ease;
+}
+.mail-auto-refresh-switch::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.18);
+  transition: transform 180ms ease;
+}
+.mail-auto-refresh-control input:checked + .mail-auto-refresh-switch {
+  background: var(--primary);
+}
+.mail-auto-refresh-control input:checked + .mail-auto-refresh-switch::after {
+  transform: translateX(12px);
+}
 .mail-control-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  min-height: 36px;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   background: var(--primary-soft);
@@ -7429,14 +7611,73 @@ var MAIL_STYLES = String.raw`
   font-weight: 700;
 }
 .mail-control-chip strong { color: var(--primary); }
+.mail-control-chip .visitor-count {
+  font-size: inherit;
+  line-height: 1;
+}
+.mail-pagination-controls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.mail-pagination-controls label,
+.mail-page-indicator,
+.mail-page-numbers {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  margin: 0;
+  color: var(--muted-strong);
+  font-weight: 750;
+  line-height: 1;
+  white-space: nowrap;
+}
+.mail-page-numbers { gap: 4px; }
+.mail-page-number {
+  min-width: 36px;
+  padding-inline: 10px;
+}
+.mail-page-number.active {
+  background: var(--primary-soft);
+  border-color: #bfdbfe;
+  color: var(--primary-dark);
+  box-shadow: none;
+}
+.mail-page-ellipsis {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  color: var(--muted);
+  font-weight: 800;
+  padding: 0 2px;
+}
+.mail-pagination-controls select {
+  min-height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  background: #fff;
+  color: var(--text);
+}
+.mail-viewer-controls button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .mail-viewer-grid {
   display: grid;
   grid-template-columns: minmax(290px, 380px) minmax(0, 1fr);
   min-height: min(780px, calc(100vh - 220px));
   border-top: 1px solid var(--line);
+  align-items: stretch;
 }
 .mail-list-panel {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   border-right: 1px solid var(--line);
   background: var(--surface-solid);
 }
@@ -7452,7 +7693,9 @@ var MAIL_STYLES = String.raw`
 .mail-list {
   display: grid;
   align-content: start;
-  max-height: min(730px, calc(100vh - 260px));
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
   overflow: auto;
 }
 button.mail-list-item {
@@ -7815,6 +8058,22 @@ pre {
   color: #166534;
 }
 .generated-link span { min-width: 0; overflow-wrap: anywhere; }
+.database-version-line {
+  display: inline-block;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 246, 255, 0.86);
+  color: #1e40af;
+  font-weight: 750;
+}
+.database-version-line strong { color: var(--primary-dark); }
+.database-version-line.warning {
+  border-color: #fed7aa;
+  background: var(--warning-soft);
+  color: #9a3412;
+}
+.database-version-line.warning strong { color: #9a3412; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin-bottom: 18px; }
 .metric-card { gap: 14px; padding: 18px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .metric-value { display: block; font-size: 28px; line-height: 1; font-weight: 850; letter-spacing: -0.04em; margin-top: 4px; }
@@ -7929,6 +8188,51 @@ function optional(selector) { return document.querySelector(selector); }
 function on(selector, eventName, handler) {
   const element = optional(selector);
   if (element) element.addEventListener(eventName, handler);
+}
+function createMailRefreshController(options) {
+  const input = optional(options.inputSelector);
+  const label = optional(options.labelSelector);
+  const intervalSeconds = Math.max(5, Number(options.intervalSeconds) || 60);
+  let enabled = input ? input.checked !== false : true;
+  let remaining = intervalSeconds;
+  let loading = false;
+  const updateLabel = () => {
+    if (label) label.textContent = enabled ? remaining + "秒后刷新" : "自动刷新已关闭";
+  };
+  const reset = () => {
+    remaining = intervalSeconds;
+    updateLabel();
+  };
+  async function refreshNow() {
+    if (loading) return;
+    loading = true;
+    try {
+      await options.refresh();
+    } finally {
+      loading = false;
+      reset();
+    }
+  }
+  function setEnabled(nextEnabled) {
+    enabled = Boolean(nextEnabled);
+    if (input) input.checked = enabled;
+    reset();
+  }
+  const timerId = setInterval(() => {
+    if (!enabled || loading) return;
+    remaining -= 1;
+    if (remaining <= 0) refreshNow();
+    else updateLabel();
+  }, 1000);
+  if (input) input.addEventListener("change", () => setEnabled(input.checked));
+  setEnabled(enabled);
+  return { refreshNow, setEnabled, reset, stop: () => clearInterval(timerId) };
+}
+function mailPageNumberItems(currentPage, totalPages) {
+  if (totalPages <= 10) return Array.from({ length: totalPages }, (_, index) => index + 1);
+  if (currentPage <= 4) return [1, 2, 3, 4, "ellipsis", totalPages - 2, totalPages - 1, totalPages];
+  if (currentPage >= totalPages - 3) return [1, 2, 3, "ellipsis", totalPages - 3, totalPages - 2, totalPages - 1, totalPages];
+  return [1, 2, "ellipsis", currentPage - 1, currentPage, currentPage + 1, "ellipsis", totalPages - 1, totalPages];
 }
 function normalizeCodes(codes) {
   if (Array.isArray(codes)) return codes.map((code) => typeof code === "string" ? code : code?.code).filter(Boolean);
@@ -8057,7 +8361,17 @@ function adminScript(section) {
 }
 __name(adminScript, "adminScript");
 var ADMIN_SCRIPT = String.raw`
-const state = { rules: [], links: [], emails: [], selectedEmailId: null, currentQuery: "" };
+const state = {
+  rules: [],
+  links: [],
+  emails: [],
+  selectedEmailId: null,
+  currentQuery: "",
+  emailPage: 1,
+  emailPageSize: 50,
+  emailPagination: null
+};
+const MAIL_AUTO_REFRESH_SECONDS = 60;
 const currentPage = "__ADMIN_SECTION__";
 const authLoading = document.querySelector("#auth-loading");
 const loginSection = document.querySelector("#login-section");
@@ -8065,6 +8379,7 @@ const appSection = document.querySelector("#app-section");
 const loginMessage = document.querySelector("#login-message");
 const adminName = document.querySelector("#admin-name");
 const logoutButton = document.querySelector("#logout");
+let mailRefreshController = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
@@ -8085,6 +8400,7 @@ function showLogin() {
   appSection.classList.add("hidden");
   logoutButton.classList.add("hidden");
   adminName.textContent = "";
+  stopMailRefreshController();
 }
 
 on("#login-form", "submit", async (event) => {
@@ -8107,9 +8423,15 @@ on("#logout", "click", async () => {
 });
 on("#search-form", "submit", async (event) => {
   event.preventDefault();
-  await loadEmails(new FormData(event.currentTarget).get("q"));
+  await loadEmails(new FormData(event.currentTarget).get("q"), 1);
 });
-on("#reload-emails", "click", () => loadEmails());
+on("#reload-emails", "click", () => refreshAdminEmailsNow());
+on("#email-page-prev", "click", () => loadEmails(state.currentQuery, state.emailPage - 1));
+on("#email-page-next", "click", () => loadEmails(state.currentQuery, state.emailPage + 1));
+on("#email-page-size", "change", async (event) => {
+  state.emailPageSize = Number(event.currentTarget.value) || 50;
+  await loadEmails(state.currentQuery, 1);
+});
 on("#open-rule-form", "click", () => openRuleForm());
 on("#open-link-form", "click", () => openLinkForm());
 on("#upgrade-database", "click", () => upgradeDatabase());
@@ -8123,7 +8445,29 @@ async function loadCurrentPage() {
   if (currentPage === "rules") await loadRules();
   if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
   if (currentPage === "database") await loadDatabaseStatus();
-  if (currentPage === "mail") await loadEmails();
+  if (currentPage === "mail") {
+    ensureMailRefreshController();
+    await loadEmails();
+  }
+}
+
+function ensureMailRefreshController() {
+  if (mailRefreshController || currentPage !== "mail") return;
+  mailRefreshController = createMailRefreshController({
+    inputSelector: "#admin-auto-refresh-toggle",
+    labelSelector: "#admin-auto-refresh-label",
+    intervalSeconds: MAIL_AUTO_REFRESH_SECONDS,
+    refresh: () => loadEmails()
+  });
+}
+function stopMailRefreshController() {
+  if (!mailRefreshController) return;
+  mailRefreshController.stop();
+  mailRefreshController = null;
+}
+function refreshAdminEmailsNow() {
+  if (mailRefreshController) return mailRefreshController.refreshNow();
+  return loadEmails();
 }
 
 async function submitRuleForm(event) {
@@ -8182,19 +8526,72 @@ async function submitLinkForm(event) {
 function updateMetrics(emails) {
   const total = optional("#metric-total");
   if (!total) return;
-  total.textContent = String(emails.length);
+  const pagination = state.emailPagination || fallbackEmailPagination(emails);
+  const visiblePage = pagination.total > 0 ? pagination.page : 0;
+  total.textContent = String(pagination.total);
+  optional("#metric-page-count").textContent = String(emails.length);
   optional("#metric-codes").textContent = String(emails.filter((email) => normalizeCodes(email.codes).length > 0).length);
-  optional("#metric-recent").textContent = emails[0] ? formatTime(emails[0].received_at) : "--";
+  optional("#metric-current-page").textContent = String(visiblePage);
+  optional("#metric-total-pages").textContent = String(pagination.totalPages);
+  renderEmailPageNumbers(pagination);
+  const prevButton = optional("#email-page-prev");
+  const nextButton = optional("#email-page-next");
+  if (prevButton) prevButton.disabled = !pagination.hasPreviousPage;
+  if (nextButton) nextButton.disabled = !pagination.hasNextPage;
+  const pageSize = optional("#email-page-size");
+  if (pageSize) pageSize.value = String(pagination.pageSize);
 }
-async function loadEmails(q = state.currentQuery) {
+function renderEmailPageNumbers(pagination) {
+  const container = optional("#email-page-numbers");
+  if (!container) return;
+  const totalPages = Number(pagination.totalPages) || 0;
+  if (totalPages <= 1) {
+    container.innerHTML = "";
+    return;
+  }
+  const currentPage = Math.min(Math.max(1, Number(pagination.page) || 1), totalPages);
+  container.innerHTML = emailPageNumberItems(currentPage, totalPages).map((item) => {
+    if (item === "ellipsis") return '<span class="mail-page-ellipsis" aria-hidden="true">…</span>';
+    const active = item === currentPage ? " active" : "";
+    const disabled = item === currentPage ? " disabled" : "";
+    return '<button type="button" class="secondary mail-page-number' + active + '" data-email-page="' + item +
+      '" aria-label="第 ' + item + ' 页" aria-current="' + (item === currentPage ? "page" : "false") + '"' + disabled + '>' + item + '</button>';
+  }).join("");
+  container.querySelectorAll("[data-email-page]").forEach((button) => {
+    button.addEventListener("click", () => loadEmails(state.currentQuery, Number(button.dataset.emailPage)));
+  });
+}
+function emailPageNumberItems(currentPage, totalPages) {
+  return mailPageNumberItems(currentPage, totalPages);
+}
+async function loadEmails(q = state.currentQuery, page = state.emailPage) {
   state.currentQuery = String(q || "");
-  const data = await api("/api/admin/emails?q=" + encodeURIComponent(state.currentQuery));
+  state.emailPage = Math.max(1, Number(page) || 1);
+  const params = new URLSearchParams({
+    q: state.currentQuery,
+    page: String(state.emailPage),
+    pageSize: String(state.emailPageSize)
+  });
+  const data = await api("/api/admin/emails?" + params.toString());
   state.emails = data.emails;
+  state.emailPagination = data.pagination || fallbackEmailPagination(state.emails);
+  state.emailPage = state.emailPagination.page;
+  state.emailPageSize = state.emailPagination.pageSize;
   updateMetrics(state.emails);
   renderAdminEmailList();
   const nextId = resolveAdminSelectedEmailId();
   if (nextId) await loadEmailDetail(nextId);
   else renderAdminEmptyDetail("暂无邮件");
+}
+function fallbackEmailPagination(emails) {
+  return {
+    page: state.emailPage,
+    pageSize: state.emailPageSize,
+    total: emails.length,
+    totalPages: emails.length > 0 ? 1 : 0,
+    hasPreviousPage: false,
+    hasNextPage: false
+  };
 }
 function resolveAdminSelectedEmailId() {
   if (state.emails.length === 0) return null;
@@ -8338,17 +8735,19 @@ function renderLinksTable() {
   list.innerHTML = state.links.map(renderLinkItem).join("") || '<div class="empty-state">暂无链接</div>';
   list.querySelectorAll("[data-edit-link]").forEach((button) => button.addEventListener("click", () => editLink(Number(button.dataset.editLink))));
   list.querySelectorAll("[data-copy-link]").forEach((button) => button.addEventListener("click", () => copyShareLink(Number(button.dataset.copyLink))));
+  list.querySelectorAll("[data-reset-link]").forEach((button) => button.addEventListener("click", () => resetShareLink(Number(button.dataset.resetLink))));
   list.querySelectorAll("[data-delete-link]").forEach((button) => button.addEventListener("click", () => deleteLinkItem(Number(button.dataset.deleteLink))));
 }
 function renderLinkItem(link) {
   const status = link.status === "active" ? '<span class="badge success">active</span>' : '<span class="badge muted-badge">disabled</span>';
-  const copyHint = link.url ? "复制链接" : "旧链接缺少可恢复 token，无法重新获取";
+  const copyHint = link.url ? "复制链接" : "旧链接缺少明文 token，请先重置链接";
   return '<article class="list-item-card">' +
     '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(link.name || "未命名") + '</strong><span class="badge muted-badge">#' + link.id + '</span>' + status + '</div>' +
     '<div class="item-meta">' + renderMetaPill("规则", link.ruleIds.join(", ") || "无") + renderMetaPill("过期", formatDate(link.expires_at)) +
     renderMetaPill("窗口", String(link.window_minutes || 30) + " 分钟") + renderMetaPill("最近访问", formatDate(link.last_accessed_at)) + '</div></div>' +
     '<div class="item-actions"><button type="button" class="secondary" data-edit-link="' + link.id + '">编辑</button>' +
     '<button type="button" class="secondary" title="' + escapeAttribute(copyHint) + '" data-copy-link="' + link.id + '">复制</button>' +
+    '<button type="button" class="secondary" data-reset-link="' + link.id + '">重置链接</button>' +
     '<button type="button" class="danger" data-delete-link="' + link.id + '">删除</button></div></article>';
 }
 function openLinkForm() {
@@ -8385,11 +8784,19 @@ async function copyShareLink(id) {
   const link = state.links.find((item) => Number(item.id) === id);
   if (!link) return;
   if (!link.url) {
-    optional("#link-message").textContent = "旧链接缺少可恢复 token，无法重新获取。请重新生成链接。";
+    optional("#link-message").textContent = "旧链接缺少明文 token，请点击“重置链接”后再复制。";
     return;
   }
   await copyText(link.url);
   optional("#link-message").textContent = "已复制链接";
+}
+async function resetShareLink(id) {
+  const link = state.links.find((item) => Number(item.id) === id);
+  if (!link || !confirm("重置后旧访问链接将失效，确认重置“" + (link.name || "未命名") + "”？")) return;
+  const result = await api("/api/admin/share-links/" + encodeURIComponent(id) + "/reset", { method: "POST", body: "{}" });
+  renderGeneratedLink(result.url, "重置后新链接：");
+  optional("#link-message").textContent = "已重置链接";
+  await loadLinks();
 }
 async function deleteLinkItem(id) {
   const link = state.links.find((item) => Number(item.id) === id);
@@ -8419,10 +8826,13 @@ async function upgradeDatabase() {
 function renderDatabaseStatus(data) {
   const target = optional("#database-status");
   if (!target) return;
-  const rows = data.migrations.map((item) => '<tr><td><strong>' + escapeText(item.id) + '</strong><div class="muted">' +
-    escapeText(item.description) + '</div></td><td><span class="badge ' + (item.applied ? 'success' : 'muted-badge') + '">' +
-    (item.applied ? "已应用" : "待升级") + '</span></td><td>' + escapeText(formatDate(item.appliedAt)) + '</td></tr>').join("");
-  target.innerHTML = '<div class="table-wrap"><table><thead><tr><th>迁移</th><th>状态</th><th>应用时间</th></tr></thead><tbody>' + rows + '</tbody></table></div>';
+  const upgradeButton = optional("#upgrade-database");
+  if (upgradeButton) upgradeButton.classList.toggle("hidden", !data.needsUpgrade);
+  const statusClass = data.needsUpgrade ? " warning" : "";
+  target.innerHTML = '<div class="database-version-line' + statusClass + '">' +
+    '当前数据库版本: <strong>' + escapeText(data.currentDatabaseVersion) + '</strong>, ' +
+    '需要的数据库版本: <strong>' + escapeText(data.requiredDatabaseVersion) + '</strong>' +
+    '</div>';
 }
 function showDialog(id) {
   const dialog = optional("#" + id);
@@ -8442,11 +8852,11 @@ function toDatetimeLocal(value) {
   if (Number.isNaN(date.getTime())) return "";
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
-function renderGeneratedLink(url) {
+function renderGeneratedLink(url, label = "新链接：") {
   const output = optional("#new-link");
   if (!output) return;
   output.classList.remove("hidden");
-  output.innerHTML = '<span><strong>新链接：</strong>' + escapeText(url) + '</span><button type="button" class="secondary" data-copy-new-link>复制</button>';
+  output.innerHTML = '<span><strong>' + escapeText(label) + '</strong>' + escapeText(url) + '</span><button type="button" class="secondary" data-copy-new-link>复制</button>';
   on("[data-copy-new-link]", "click", async () => {
     await copyText(url);
     optional("#link-message").textContent = "已复制链接";
@@ -8566,10 +8976,30 @@ function mailSection() {
     <button type="submit">查询</button>
   </form>
   <div class="mail-viewer-controls">
-    <button id="reload-emails" type="button" class="secondary">刷新</button>
-    <span class="mail-control-chip">当前列表 <strong id="metric-total">0</strong></span>
+    <div class="mail-refresh-actions" aria-label="邮件刷新控制">
+      <label class="mail-auto-refresh-control" for="admin-auto-refresh-toggle">
+        <span id="admin-auto-refresh-label">60秒后刷新</span>
+        <input id="admin-auto-refresh-toggle" type="checkbox" checked aria-label="自动刷新邮件">
+        <span class="mail-auto-refresh-switch" aria-hidden="true"></span>
+      </label>
+      <button id="reload-emails" type="button" class="secondary">刷新</button>
+    </div>
+    <span class="mail-control-chip">本页 <strong id="metric-page-count">0</strong></span>
+    <span class="mail-control-chip">总结果 <strong id="metric-total">0</strong></span>
     <span class="mail-control-chip">命中邮件 <strong id="metric-codes">0</strong></span>
-    <span class="mail-control-chip">最近收件 <strong id="metric-recent">--</strong></span>
+    <div class="mail-pagination-controls" aria-label="邮件分页">
+      <button id="email-page-prev" type="button" class="secondary">上一页</button>
+      <span class="mail-page-indicator">第 <strong id="metric-current-page">0</strong> / <strong id="metric-total-pages">0</strong> 页</span>
+      <div id="email-page-numbers" class="mail-page-numbers" aria-label="邮件页码"></div>
+      <label>每页
+        <select id="email-page-size" aria-label="每页邮件数量">
+          <option value="20">20</option>
+          <option value="50" selected>50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
+      <button id="email-page-next" type="button" class="secondary">下一页</button>
+    </div>
   </div>
   <div class="mail-viewer-grid">
     <aside class="mail-list-panel" aria-label="邮件列表">
@@ -8609,8 +9039,8 @@ __name(shareSection, "shareSection");
 function databaseSection() {
   return String.raw`<section id="database-center">
   <div class="card-header">
-    <div class="card-title"><p class="page-kicker">Database</p><h1>数据库管理</h1><p class="muted">更新 Worker JS 后，可在这里执行内置 D1 建表与升级语句。</p></div>
-    <button id="upgrade-database" type="button">升级数据库</button>
+    <div class="card-title"><p class="page-kicker">Database</p><h1>数据库管理</h1><p class="muted">更新 Worker JS 后，可在这里检查并升级数据库版本。</p></div>
+    <button id="upgrade-database" class="hidden" type="button">升级数据库</button>
   </div>
   <div id="database-message" class="muted" style="margin-bottom:12px"></div>
   <div id="database-status"></div>
@@ -8737,7 +9167,6 @@ var VISITOR_BODY = String.raw`
     </div>
     <div class="toolbar">
       <span class="inline-status"><span class="status-dot"></span><span id="status">同步中</span></span>
-      <button id="refresh" type="button" class="secondary">刷新</button>
     </div>
   </header>
   <main style="width:100%;margin:0">
@@ -8747,9 +9176,30 @@ var VISITOR_BODY = String.raw`
         <button id="visitor-clear-filter" type="button" class="secondary">清空</button>
       </div>
       <div class="mail-viewer-controls">
+        <div class="mail-refresh-actions" aria-label="邮件刷新控制">
+          <label class="mail-auto-refresh-control" for="visitor-auto-refresh-toggle">
+            <span id="visitor-auto-refresh-label">60秒后刷新</span>
+            <input id="visitor-auto-refresh-toggle" type="checkbox" checked aria-label="自动刷新邮件">
+            <span class="mail-auto-refresh-switch" aria-hidden="true"></span>
+          </label>
+          <button id="refresh" type="button" class="secondary">刷新</button>
+        </div>
         <span class="mail-control-chip">匹配邮件 <strong id="email-count" class="visitor-count">0</strong></span>
         <span class="mail-control-chip">最近同步 <strong id="last-sync">--</strong></span>
         <span class="mail-control-chip">30 分钟窗口</span>
+        <div class="mail-pagination-controls" aria-label="访客邮件分页">
+          <button id="visitor-page-prev" type="button" class="secondary">上一页</button>
+          <span class="mail-page-indicator">第 <strong id="visitor-current-page">0</strong> / <strong id="visitor-total-pages">0</strong> 页</span>
+          <div id="visitor-page-numbers" class="mail-page-numbers" aria-label="访客邮件页码"></div>
+          <label>每页
+            <select id="visitor-page-size" aria-label="每页匹配邮件数量">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+            </select>
+          </label>
+          <button id="visitor-page-next" type="button" class="secondary">下一页</button>
+        </div>
       </div>
       <div class="mail-viewer-grid">
         <aside class="mail-list-panel" aria-label="匹配邮件列表">
@@ -8771,13 +9221,26 @@ __name(safeScriptString, "safeScriptString");
 function visitorScript(token) {
   return COMMON_MAIL_CLIENT_SCRIPT + `
 const token = ${safeScriptString(token)};
-const visitorState = { emails: [], selectedEmailKey: null, filter: "" };
+const visitorState = { emails: [], selectedEmailKey: null, filter: "", emailPage: 1, emailPageSize: 20, emailPagination: null };
 const emails = document.querySelector("#emails");
 const statusEl = document.querySelector("#status");
 const countEl = document.querySelector("#email-count");
 const lastSyncEl = document.querySelector("#last-sync");
 const filterInput = document.querySelector("#visitor-filter");
-document.querySelector("#refresh").addEventListener("click", loadEmails);
+const pageSizeInput = document.querySelector("#visitor-page-size");
+const visitorRefreshController = createMailRefreshController({
+  inputSelector: "#visitor-auto-refresh-toggle",
+  labelSelector: "#visitor-auto-refresh-label",
+  intervalSeconds: 60,
+  refresh: () => loadEmails()
+});
+document.querySelector("#refresh").addEventListener("click", () => visitorRefreshController.refreshNow());
+document.querySelector("#visitor-page-prev").addEventListener("click", () => loadEmails(visitorState.emailPage - 1));
+document.querySelector("#visitor-page-next").addEventListener("click", () => loadEmails(visitorState.emailPage + 1));
+pageSizeInput.addEventListener("change", async () => {
+  visitorState.emailPageSize = Number(pageSizeInput.value) || 20;
+  await loadEmails(1);
+});
 filterInput.addEventListener("input", () => {
   visitorState.filter = filterInput.value;
   renderVisitorListAndDetail();
@@ -8788,13 +9251,20 @@ document.querySelector("#visitor-clear-filter").addEventListener("click", () => 
   renderVisitorListAndDetail();
 });
 
-async function loadEmails() {
+async function loadEmails(page = visitorState.emailPage) {
   statusEl.textContent = "\u540C\u6B65\u4E2D";
-  const response = await fetch("/api/visitor/" + encodeURIComponent(token) + "/emails");
+  visitorState.emailPage = Math.max(1, Number(page) || 1);
+  const params = new URLSearchParams({
+    page: String(visitorState.emailPage),
+    pageSize: String(visitorState.emailPageSize)
+  });
+  const response = await fetch("/api/visitor/" + encodeURIComponent(token) + "/emails?" + params.toString());
   const data = await response.json();
   if (!response.ok) {
     statusEl.textContent = data.error || "\u94FE\u63A5\u4E0D\u53EF\u7528";
     countEl.textContent = "0";
+    visitorState.emailPagination = fallbackVisitorPagination([]);
+    updateVisitorPagination(visitorState.emailPagination);
     emails.innerHTML = '<div class="empty-state">\u94FE\u63A5\u4E0D\u53EF\u7528\u6216\u5DF2\u8FC7\u671F</div>';
     renderVisitorEmptyDetail("\u94FE\u63A5\u4E0D\u53EF\u7528\u6216\u5DF2\u8FC7\u671F");
     return;
@@ -8802,12 +9272,57 @@ async function loadEmails() {
   const syncTime = new Date().toLocaleTimeString();
   statusEl.textContent = "\u5DF2\u540C\u6B65";
   lastSyncEl.textContent = syncTime;
+  visitorState.emailPagination = data.pagination || fallbackVisitorPagination(data.emails);
+  visitorState.emailPage = visitorState.emailPagination.page;
+  visitorState.emailPageSize = visitorState.emailPagination.pageSize;
   visitorState.emails = data.emails.map((email, index) => ({
     ...email,
-    viewKey: String(index) + "-" + String(email.receivedAt || "")
+    viewKey: String(visitorState.emailPage) + "-" + String(index) + "-" + String(email.receivedAt || "")
   }));
-  countEl.textContent = String(data.emails.length);
+  countEl.textContent = String(visitorState.emailPagination.total);
+  updateVisitorPagination(visitorState.emailPagination);
   renderVisitorListAndDetail();
+}
+function fallbackVisitorPagination(items) {
+  return {
+    page: visitorState.emailPage,
+    pageSize: visitorState.emailPageSize,
+    total: items.length,
+    totalPages: items.length > 0 ? 1 : 0,
+    hasPreviousPage: false,
+    hasNextPage: false
+  };
+}
+function updateVisitorPagination(pagination) {
+  const visiblePage = pagination.total > 0 ? pagination.page : 0;
+  optional("#visitor-current-page").textContent = String(visiblePage);
+  optional("#visitor-total-pages").textContent = String(pagination.totalPages);
+  const prevButton = optional("#visitor-page-prev");
+  const nextButton = optional("#visitor-page-next");
+  if (prevButton) prevButton.disabled = !pagination.hasPreviousPage;
+  if (nextButton) nextButton.disabled = !pagination.hasNextPage;
+  if (pageSizeInput) pageSizeInput.value = String(pagination.pageSize);
+  renderVisitorPageNumbers(pagination);
+}
+function renderVisitorPageNumbers(pagination) {
+  const container = optional("#visitor-page-numbers");
+  if (!container) return;
+  const totalPages = Number(pagination.totalPages) || 0;
+  if (totalPages <= 1) {
+    container.innerHTML = "";
+    return;
+  }
+  const currentPage = Math.min(Math.max(1, Number(pagination.page) || 1), totalPages);
+  container.innerHTML = mailPageNumberItems(currentPage, totalPages).map((item) => {
+    if (item === "ellipsis") return '<span class="mail-page-ellipsis" aria-hidden="true">\u2026</span>';
+    const active = item === currentPage ? " active" : "";
+    const disabled = item === currentPage ? " disabled" : "";
+    return '<button type="button" class="secondary mail-page-number' + active + '" data-visitor-page="' + item +
+      '" aria-label="\u7B2C ' + item + ' \u9875" aria-current="' + (item === currentPage ? "page" : "false") + '"' + disabled + '>' + item + '</button>';
+  }).join("");
+  container.querySelectorAll("[data-visitor-page]").forEach((button) => {
+    button.addEventListener("click", () => loadEmails(Number(button.dataset.visitorPage)));
+  });
 }
 function visitorVisibleEmails() {
   const query = visitorState.filter.trim().toLowerCase();
@@ -8878,7 +9393,7 @@ function navigateVisitorEmail(delta) {
 }
 
 loadEmails();
-setInterval(loadEmails, 15000);`;
+`;
 }
 __name(visitorScript, "visitorScript");
 
@@ -8909,9 +9424,11 @@ async function visitorEmails(c) {
     return notFound(c, "Link is not available.");
   }
   const since = minutesAgoIso(link.window_minutes);
+  const pageSize = clampNumber(c.req.query("pageSize") ?? c.req.query("limit"), 20, 1, MAX_EMAIL_LIMIT);
+  const requestedPage = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
-  const emails = candidates.filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules)).map((email) => ({
+  const matchedEmails = candidates.filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules)).map((email) => ({
     subject: email.subject,
     receivedAt: email.received_at,
     codes: email.codes.map((code) => code.code),
@@ -8921,10 +9438,29 @@ async function visitorEmails(c) {
     trustedAuthentication: hasTrustedAuthentication(email.content.headers),
     contentTruncated: Boolean(email.content_truncated)
   }));
+  const pagination = visitorPagination(matchedEmails.length, requestedPage, pageSize);
+  const emails = matchedEmails.slice(pagination.offset, pagination.offset + pagination.pageSize);
   await Promise.all([markShareLinkAccessed(c.env.DB, link.id), logVisitorAccess(c, link)]);
-  return c.json({ ok: true, windowMinutes: link.window_minutes, since, emails });
+  return c.json({ ok: true, windowMinutes: link.window_minutes, since, emails, pagination: pagination.response });
 }
 __name(visitorEmails, "visitorEmails");
+function visitorPagination(total, requestedPage, pageSize) {
+  const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+  const page2 = totalPages > 0 ? Math.min(requestedPage, totalPages) : 1;
+  return {
+    pageSize,
+    offset: (page2 - 1) * pageSize,
+    response: {
+      page: page2,
+      pageSize,
+      total,
+      totalPages,
+      hasPreviousPage: totalPages > 0 && page2 > 1,
+      hasNextPage: totalPages > 0 && page2 < totalPages
+    }
+  };
+}
+__name(visitorPagination, "visitorPagination");
 async function logVisitorAccess(c, link) {
   await writeAccessLog(c.env.DB, {
     actorType: "visitor",

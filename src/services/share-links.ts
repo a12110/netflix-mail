@@ -71,6 +71,13 @@ export async function updateShareLink(db: D1Database, id: number, input: UpdateS
   }
 }
 
+export async function resetShareLinkToken(db: D1Database, id: number): Promise<string> {
+  const token = randomToken();
+  const tokenHash = await hashShareToken(token);
+  await db.prepare("UPDATE share_links SET token = ?1, token_hash = ?2 WHERE id = ?3").bind(token, tokenHash, id).run();
+  return token;
+}
+
 export async function deleteShareLink(db: D1Database, id: number): Promise<void> {
   await db.prepare("DELETE FROM share_links WHERE id = ?1").bind(id).run();
 }

@@ -1,10 +1,11 @@
 import type { Context, Hono } from "hono";
+import { MAX_EMAIL_LIMIT, MAX_EMAIL_PAGE } from "../constants";
 import { emailDetailToRuleInput, listCandidateEmailDetailsSince } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
 import { getRulesByIds, matchesAnyRule } from "../services/rules";
 import { getShareLinkByToken, isShareLinkUsable, markShareLinkAccessed } from "../services/share-links";
 import type { AppEnv, ShareLinkRow } from "../types";
-import { notFound } from "../utils/http";
+import { clampNumber, notFound } from "../utils/http";
 import { minutesAgoIso } from "../utils/time";
 import { cleanEmailBody, previewText, stripHtml } from "../utils/text";
 
@@ -23,9 +24,11 @@ async function visitorEmails(c: Context<AppEnv>): Promise<Response> {
   }
 
   const since = minutesAgoIso(link.window_minutes);
+  const pageSize = clampNumber(c.req.query("pageSize") ?? c.req.query("limit"), 20, 1, MAX_EMAIL_LIMIT);
+  const requestedPage = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
-  const emails = candidates
+  const matchedEmails = candidates
     .filter((email) => matchesAnyRule(emailDetailToRuleInput(email), rules))
     .map((email) => ({
       subject: email.subject,
@@ -37,9 +40,28 @@ async function visitorEmails(c: Context<AppEnv>): Promise<Response> {
       trustedAuthentication: hasTrustedAuthentication(email.content.headers),
       contentTruncated: Boolean(email.content_truncated)
     }));
+  const pagination = visitorPagination(matchedEmails.length, requestedPage, pageSize);
+  const emails = matchedEmails.slice(pagination.offset, pagination.offset + pagination.pageSize);
 
   await Promise.all([markShareLinkAccessed(c.env.DB, link.id), logVisitorAccess(c, link)]);
-  return c.json({ ok: true, windowMinutes: link.window_minutes, since, emails });
+  return c.json({ ok: true, windowMinutes: link.window_minutes, since, emails, pagination: pagination.response });
+}
+
+function visitorPagination(total: number, requestedPage: number, pageSize: number) {
+  const totalPages = total > 0 ? Math.ceil(total / pageSize) : 0;
+  const page = totalPages > 0 ? Math.min(requestedPage, totalPages) : 1;
+  return {
+    pageSize,
+    offset: (page - 1) * pageSize,
+    response: {
+      page,
+      pageSize,
+      total,
+      totalPages,
+      hasPreviousPage: totalPages > 0 && page > 1,
+      hasNextPage: totalPages > 0 && page < totalPages
+    }
+  };
 }
 
 async function logVisitorAccess(c: Context<AppEnv>, link: ShareLinkRow): Promise<void> {

@@ -1,5 +1,5 @@
 import type { Context, Hono } from "hono";
-import { SESSION_COOKIE } from "../constants";
+import { DEFAULT_EMAIL_LIMIT, MAX_EMAIL_LIMIT, MAX_EMAIL_PAGE, SESSION_COOKIE } from "../constants";
 import {
   authenticateAdmin,
   countAdmins,
@@ -11,10 +11,10 @@ import {
   verifySessionValue
 } from "../services/auth";
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
-import { getEmailDetail, listEmails } from "../services/emails";
+import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
 import { createRule, deleteRule, getRulesByIds, listRules, parseRuleFields, sanitizeRuleInput, updateRule } from "../services/rules";
-import { createShareLink, deleteShareLink, listShareLinks, updateShareLink } from "../services/share-links";
+import { createShareLink, deleteShareLink, listShareLinks, resetShareLinkToken, updateShareLink } from "../services/share-links";
 import type { AdminRow, AppEnv } from "../types";
 import { badRequest, clampNumber, forbidden, notFound, readJson, unauthorized } from "../utils/http";
 import { timingSafeEqual } from "../utils/encoding";
@@ -56,6 +56,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
   app.get("/api/admin/share-links", async (c) => withAdmin(c, () => adminListShareLinks(c)));
   app.post("/api/admin/share-links", async (c) => withAdmin(c, (admin) => adminCreateShareLink(c, admin)));
   app.patch("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminUpdateShareLink(c)));
+  app.post("/api/admin/share-links/:id/reset", async (c) => withAdmin(c, (admin) => adminResetShareLink(c, admin)));
   app.delete("/api/admin/share-links/:id", async (c) => withAdmin(c, () => adminDeleteShareLink(c)));
   app.get("/api/admin/database/status", async (c) => withAdmin(c, () => adminDatabaseStatus(c)));
   app.post("/api/admin/database/upgrade", async (c) => withAdmin(c, () => adminUpgradeDatabase(c)));
@@ -113,9 +114,11 @@ async function withAdmin(c: Context<AppEnv>, handler: (admin: AdminRow) => Promi
 }
 
 async function adminListEmails(c: Context<AppEnv>): Promise<Response> {
-  const limit = clampNumber(c.req.query("limit") ?? null, 50, 1, 100);
-  const emails = await listEmails(c.env.DB, { q: c.req.query("q"), limit });
-  return c.json({ ok: true, emails });
+  const page = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
+  const pageSizeParam = c.req.query("pageSize") ?? c.req.query("limit");
+  const pageSize = clampNumber(pageSizeParam, DEFAULT_EMAIL_LIMIT, 1, MAX_EMAIL_LIMIT);
+  const result = await listEmailPage(c.env.DB, { q: c.req.query("q"), page, limit: pageSize });
+  return c.json({ ok: true, emails: result.emails, pagination: result.pagination });
 }
 
 async function adminEmailDetail(c: Context<AppEnv>): Promise<Response> {
@@ -219,6 +222,22 @@ async function adminDeleteShareLink(c: Context<AppEnv>): Promise<Response> {
   }
   await deleteShareLink(c.env.DB, id);
   return c.json({ ok: true });
+}
+
+async function adminResetShareLink(c: Context<AppEnv>, admin: AdminRow): Promise<Response> {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id)) {
+    return badRequest(c, "Invalid share link id.");
+  }
+  const token = await resetShareLinkToken(c.env.DB, id);
+  const url = new URL(`/v/${token}`, c.req.url).toString();
+  await writeAccessLog(c.env.DB, {
+    actorType: "admin",
+    actorId: admin.id,
+    action: `share_link.reset:${id}`,
+    request: c.req.raw
+  });
+  return c.json({ ok: true, id, token, url });
 }
 
 async function adminDatabaseStatus(c: Context<AppEnv>): Promise<Response> {
