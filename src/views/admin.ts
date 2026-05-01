@@ -132,14 +132,9 @@ function mailSection(): string {
 
 function rulesSection(): string {
   return String.raw`<section id="rule-center" class="rule-page-shell">
-  <div class="rule-page-toolbar">
+  <div class="rule-page-toolbar rule-page-header">
     <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">按白名单 / 黑名单维护访客可见邮件，支持可视化条件组与拖拽排序。</p></div>
     <button id="open-rule-form" type="button">添加规则</button>
-  </div>
-  <div class="rule-page-intro">
-    <div class="rule-intro-card"><strong>白名单优先展示</strong><span>至少命中一个允许规则才会对访客可见。</span></div>
-    <div class="rule-intro-card"><strong>黑名单即时屏蔽</strong><span>垃圾邮件、营销信或误命中邮件可直接排除。</span></div>
-    <div class="rule-intro-card"><strong>拖拽搭建表达式</strong><span>支持 AND / OR / NOT 嵌套，保留复制、上移和删除兜底。</span></div>
   </div>
   ${ruleForm()}
   <div id="rules-table" class="rule-list-shell"></div>
@@ -174,21 +169,21 @@ function ruleForm(): string {
 <form id="rule-form" class="modal-form rule-dialog-form">
   <input type="hidden" name="id">
   <div class="rule-dialog-shell">
-    <div class="modal-title-row rule-dialog-title-row"><div><p class="page-kicker">Rule Builder</p><h2 id="rule-form-title">添加规则</h2></div><button type="button" class="secondary" data-close-dialog="rule-dialog">取消</button></div>
+    <div class="modal-title-row rule-dialog-title-row"><div><h2 id="rule-form-title">添加规则</h2></div><button type="button" class="secondary rule-dialog-close" data-close-dialog="rule-dialog" aria-label="关闭">×</button></div>
     <div class="rule-form-meta-grid">
       <label class="rule-form-field"><span>规则名称</span><input name="name" placeholder="例如：Netflix 登录验证码" required></label>
       <label class="rule-form-field"><span>规则类型</span><select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select></label>
     </div>
     <div class="rule-canvas" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
       <div class="rule-builder-topline">
-        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，支持 Pointer Events 拖拽排序或移动到其他分组。</p></div>
+        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
         <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
       </div>
       <div class="rule-builder-actions rule-builder-toolbar"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
       <div id="rule-builder-root" class="rule-builder-tree rule-workspace" aria-label="规则条件树"></div>
     </div>
     <div class="rule-dialog-panels">
-      <details class="rule-quick" open><summary>批量生成条件</summary>
+      <details class="rule-quick"><summary>批量生成条件</summary>
         <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
         <div class="rule-grid">
           <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>

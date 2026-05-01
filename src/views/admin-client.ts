@@ -487,61 +487,83 @@ function renderRuleBuilder() {
   syncRuleBuilderSummary();
 }
 function renderRuleBuilderNode(node, parentId, depth, index) {
-  const isGroup = node.op === "and" || node.op === "or";
-  const canMove = Boolean(parentId);
-  const classes = "rule-node rule-node-" + node.op + (depth === 0 ? " root" : "");
+  if (node.op === "condition") return renderRuleConditionCard(node, parentId, depth, index);
+  return renderRuleGroupNode(node, parentId, depth, index);
+}
+function renderRuleGroupNode(node, parentId, depth, index) {
+  const classes = "rule-node rule-node-group rule-node-" + node.op + (depth === 0 ? " root" : "");
   return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
-    '<div class="rule-node-header">' +
-      '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '><span class="rule-grip" aria-hidden="true"></span></button>' +
-      renderRuleNodeKind(node) +
-      renderRuleNodeControls(node) +
-      '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
-    '</div>' + renderRuleNodeBody(node, depth) + '</div>';
+    '<div class="rule-group-shell">' +
+      '<div class="rule-group-header">' +
+        '<div class="rule-group-header-main">' + renderRuleGroupLead(node, parentId) + '</div>' +
+        '<div class="rule-group-header-actions">' + renderRuleNodeActions(node, parentId, index) + '</div>' +
+      '</div>' +
+      renderRuleGroupBody(node, depth) +
+    '</div>' +
+  '</div>';
+}
+function renderRuleGroupLead(node, parentId) {
+  const canMove = Boolean(parentId);
+  const leadIcon = canMove
+    ? '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"><span class="rule-grip" aria-hidden="true"></span></button>'
+    : '<span class="rule-node-caret" aria-hidden="true">⌄</span>';
+  if (node.op === "not") {
+    return leadIcon + renderRuleNodeKind(node) + '<span class="rule-node-hint">反向匹配子条件</span>';
+  }
+  return leadIcon + '<div class="rule-node-pill-select">' + renderRuleNodeKind(node) + '<select class="rule-inline-select" data-builder-op="' + escapeAttribute(node.id) + '" aria-label="条件组关系">' +
+    '<option value="and"' + (node.op === "and" ? ' selected' : '') + '>全部满足</option>' +
+    '<option value="or"' + (node.op === "or" ? ' selected' : '') + '>任一满足</option></select></div>';
+}
+function renderRuleConditionCard(node, parentId, depth, index) {
+  const canMove = Boolean(parentId);
+  return '<div class="rule-node rule-node-condition-card" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
+    '<div class="rule-condition-card">' +
+      '<div class="rule-condition-row">' +
+        '<div class="rule-condition-leading">' +
+          '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"' + (canMove ? '' : ' disabled') + '><span class="rule-grip" aria-hidden="true"></span></button>' +
+        '</div>' +
+        '<div class="rule-condition-fields">' + renderRuleConditionFields(node) + '</div>' +
+        '<div class="rule-condition-actions">' + renderRuleNodeActions(node, parentId, index) + '</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+function renderRuleConditionFields(node) {
+  return '<label class="rule-field-cell"><span>字段</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></label>' +
+    '<label class="rule-field-cell"><span>方式</span><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></label>' +
+    '<label class="rule-field-cell rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="输入关键词、地址、验证码或正则"></label>' +
+    '<div class="rule-field-cell rule-field-checkbox"><span>&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
 }
 function renderRuleNodeKind(node) {
   const kind = node.op === "and" ? "AND" : node.op === "or" ? "OR" : node.op === "not" ? "NOT" : "条件";
   const className = node.op === "or" ? " rule-node-kind-or" : node.op === "not" ? " rule-node-kind-not" : node.op === "condition" ? " rule-node-kind-condition" : "";
   return '<span class="rule-node-kind' + className + '">' + escapeText(kind) + '</span>';
 }
-function renderRuleNodeControls(node) {
-  if (node.op === "and" || node.op === "or") {
-    return '<select class="rule-inline-select" data-builder-op="' + escapeAttribute(node.id) + '" aria-label="条件组关系">' +
-      '<option value="and"' + (node.op === "and" ? " selected" : "") + '>AND 全部满足</option>' +
-      '<option value="or"' + (node.op === "or" ? " selected" : "") + '>OR 任一满足</option></select>';
-  }
-  if (node.op === "not") return '<span class="rule-node-hint">反向匹配子条件</span>';
-  return '<div class="rule-condition-grid">' +
-    '<label><span>字段</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></label>' +
-    '<label><span>方式</span><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></label>' +
-    '<label class="rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || "") + '" placeholder="输入关键词、地址、验证码或正则"></label>' +
-    '<label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? " checked" : "") + '> 区分大小写</label>' +
-  '</div>';
-}
-function renderRuleNodeActions(node, parentId, index, isGroup) {
-  const disabledRoot = parentId ? "" : " disabled";
-  return (isGroup ? '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(node.id) + '">条件</button><button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(node.id) + '">分组</button>' : '') +
-    '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + (node.op === "not" ? "取消 NOT" : "设为 NOT") + '</button>' +
-    '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '"' + disabledRoot + '>复制</button>' +
+function renderRuleNodeActions(node, parentId, index) {
+  const disabledRoot = parentId ? '' : ' disabled';
+  const toggleLabel = node.op === 'not' ? '取消 NOT' : '取反';
+  return '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '"' + disabledRoot + '>复制</button>' +
+    '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + toggleLabel + '</button>' +
     '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>上移</button>' +
     '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>下移</button>' +
     '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '"' + disabledRoot + '>删除</button>';
 }
-function renderRuleNodeBody(node, depth) {
-  if (node.op === "condition") return "";
-  if (node.op === "not") return '<div class="rule-node-children">' + renderRuleBuilderNode(node.child, null, depth + 1, 0) + '</div>';
-  const children = node.children || [];
+function renderRuleGroupBody(node, depth) {
+  const children = node.op === 'not' ? [node.child] : (node.children || []);
   let html = '<div class="rule-node-children" data-builder-group="' + escapeAttribute(node.id) + '">';
   children.forEach((child, index) => {
-    html += renderDropZone(node.id, index) + renderRuleBuilderNode(child, node.id, depth + 1, index);
+    if (node.op !== 'not') html += renderDropZone(node.id, index);
+    html += renderRuleBuilderNode(child, node.op === 'not' ? null : node.id, depth + 1, index);
   });
-  html += renderDropZone(node.id, children.length) + '</div>';
+  if (node.op !== 'not') html += renderDropZone(node.id, children.length);
+  html += '</div>';
   return html;
 }
 function renderDropZone(parentId, index) {
   return '<div class="rule-drop-zone" data-builder-drop-parent="' + escapeAttribute(parentId) + '" data-builder-drop-index="' + index + '" aria-label="拖放到此位置">拖放到这里</div>';
 }
 function ruleOptions(values, selected, labels) {
-  return values.map((value) => '<option value="' + escapeAttribute(value) + '"' + (value === selected ? " selected" : "") + '>' + escapeText(labels[value] || value) + '</option>').join("");
+  return values.map((value) => '<option value="' + escapeAttribute(value) + '"' + (value === selected ? ' selected' : '') + '>' + escapeText(labels[value] || value) + '</option>').join('');
 }
 function bindRuleBuilderEvents() {
   const root = optional("#rule-builder-root");

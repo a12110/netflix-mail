@@ -53,7 +53,7 @@ describe("view templates", () => {
     expect(rulesHtml).toContain('name="fieldLogic"');
     expect(rulesHtml).toContain('name="expressionJson"');
     expect(rulesHtml).toContain('高级表达式 JSON');
-    expect(rulesHtml).toContain('Pointer Events 拖拽排序或移动到其他分组');
+    expect(rulesHtml).toContain('拖拽排序或移动到其他分组');
     expect(rulesHtml).toContain("data-builder-drag-id");
     expect(rulesHtml).toContain("data-builder-duplicate");
     expect(rulesHtml).toContain("data-builder-drag-handle");
