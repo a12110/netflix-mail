@@ -531,7 +531,6 @@ function renderRuleConditionCard(node, parentId, depth, index) {
       '<div class="rule-condition-row">' +
         '<div class="rule-condition-leading">' +
           '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"' + (canMove ? '' : ' disabled') + '><span class="rule-grip" aria-hidden="true"></span></button>' +
-          '<span class="rule-condition-index" aria-hidden="true">' + String(index + 1) + '</span>' +
         '</div>' +
         '<div class="rule-condition-fields">' + renderRuleConditionFields(node) + '</div>' +
         '<div class="rule-condition-actions">' + renderRuleNodeActions(node, parentId, index) + '</div>' +

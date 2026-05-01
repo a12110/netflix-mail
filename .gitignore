@@ -7,6 +7,7 @@ coverage/
 *.log
 .codex-tasks/
 .playwright-mcp/
+rule-row-compact*.png
 UI/
 .DS_Store
 .vscode/

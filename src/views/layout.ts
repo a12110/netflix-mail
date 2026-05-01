@@ -243,7 +243,7 @@ pre {
   box-shadow: var(--shadow-md);
   overflow: hidden;
 }
-#rule-dialog { width: min(1040px, calc(100vw - 32px)); }
+#rule-dialog { width: min(1280px, calc(100vw - 16px)); }
 .modal-card::backdrop { background: rgba(15, 23, 42, 0.38); backdrop-filter: blur(4px); }
 .modal-form { max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px; }
 .modal-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
@@ -545,6 +545,19 @@ pre {
   margin-left: auto;
 }
 .rule-group-header-actions { flex-wrap: wrap; justify-content: flex-end; }
+.rule-condition-actions {
+  align-items: flex-end;
+  gap: 6px;
+  padding-bottom: 3px;
+  flex-wrap: nowrap;
+}
+.rule-condition-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+}
 .rule-group-header-actions .rule-action-primary {
   color: #2563eb;
   border-color: #bfdbfe;
@@ -640,8 +653,8 @@ pre {
 }
 .rule-node-children {
   display: grid;
-  gap: 12px;
-  padding: 14px 16px 16px;
+  gap: 10px;
+  padding: 12px 16px 16px;
   position: relative;
 }
 .rule-node-group:not(.root) .rule-node-children {
@@ -654,28 +667,29 @@ pre {
   box-shadow: none;
 }
 .rule-condition-card {
-  border: 1px solid #dbe7f6;
-  border-radius: 14px;
+  border: 0;
+  border-radius: 0;
   background: #fff;
-  padding: 12px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05);
+  padding: 0;
+  box-shadow: none;
 }
 .rule-condition-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
   align-items: end;
+  min-height: 62px;
 }
 .rule-condition-leading {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   justify-content: center;
-  gap: 8px;
+  padding-bottom: 3px;
 }
 .rule-drag-handle {
   cursor: grab;
-  min-height: 38px;
-  width: 38px;
+  min-height: 34px;
+  width: 28px;
   padding: 0;
   user-select: none;
   touch-action: none;
@@ -694,28 +708,15 @@ pre {
   background-position: 0 0;
   opacity: 0.72;
 }
-.rule-condition-index {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  border: 1px solid #bfdbfe;
-  border-radius: 999px;
-  color: #2563eb;
-  background: #eff6ff;
-  font-size: 12px;
-  font-weight: 900;
-}
 .rule-condition-fields {
   display: grid;
-  grid-template-columns: minmax(170px, 0.88fr) minmax(160px, 0.8fr) minmax(260px, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: minmax(150px, 1.05fr) minmax(118px, 0.78fr) minmax(190px, 1fr) max-content;
+  gap: 10px;
   align-items: end;
 }
 .rule-field-cell {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   margin: 0;
 }
 .rule-field-cell span {
@@ -724,26 +725,27 @@ pre {
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.04em;
+  line-height: 1.2;
 }
 .rule-select-shell {
   position: relative;
   display: flex;
   align-items: center;
 }
-.rule-field-select-shell select { padding-left: 48px; }
+.rule-field-select-shell select { padding-left: 42px !important; }
 .rule-field-icon {
   position: absolute;
-  left: 12px;
+  left: 10px;
   z-index: 1;
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
   color: #2563eb !important;
   background: #eff6ff;
-  font-size: 15px !important;
+  font-size: 12px !important;
   font-weight: 900 !important;
   letter-spacing: 0 !important;
   pointer-events: none;
@@ -752,21 +754,36 @@ pre {
 .rule-field-cell select,
 .rule-field-cell input {
   width: 100%;
-  min-height: 42px;
-  padding: 8px 14px;
+  min-height: 34px;
+  padding: 6px 10px;
   border-color: #dbe7f6;
-  border-radius: 10px;
+  border-radius: 8px;
   background-color: #fff;
   color: #1f2937;
   font-weight: 800;
+  font-size: 13px;
 }
-.rule-field-checkbox { min-width: 116px; }
+.rule-field-checkbox { min-width: 104px; }
 .rule-case-toggle {
-  min-height: 42px;
+  min-height: 34px;
   width: 100%;
   justify-content: flex-start;
   margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
   white-space: nowrap;
+}
+.rule-case-toggle input {
+  width: 16px !important;
+  height: 16px;
+  min-height: 16px !important;
+  margin: 0;
+  padding: 0;
+  accent-color: #2563eb;
+  flex: 0 0 auto;
 }
 .rule-drop-zone { display: none; }
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone {
