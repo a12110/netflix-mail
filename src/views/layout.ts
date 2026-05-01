@@ -491,7 +491,7 @@ pre {
   background: rgba(255, 255, 255, 0.96);
   box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
   overflow: hidden;
-  transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease;
+  transition: transform 140ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease;
 }
 .rule-node:hover,
 .rule-node:focus-within {
@@ -499,8 +499,9 @@ pre {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 .rule-node.is-dragging-source {
-  opacity: 0.42;
+  opacity: 0.32;
   border-color: rgba(11, 116, 222, 0.5);
+  border-style: dashed;
   box-shadow: 0 18px 36px rgba(11, 116, 222, 0.18);
 }
 .rule-node-group.root {

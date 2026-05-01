@@ -21,6 +21,8 @@ const state = {
   ruleBuilderPointerId: null,
   ruleBuilderActiveDropZone: null,
   ruleBuilderDragOffset: null,
+  ruleBuilderLastLiveDropKey: null,
+  ruleBuilderLiveRendering: false,
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
@@ -548,7 +550,7 @@ function ruleFieldIcon(field) {
   if (field === "from" || field === "to") return "✉";
   if (field === "code") return "#";
   if (field === "html") return "&lt;/&gt;";
-  return "A";
+  return "T";
 }
 function ruleValuePlaceholder(node) {
   if (node.operator === "regex") return "输入正则表达式";
@@ -660,6 +662,7 @@ function handleRuleBuilderPointerDown(event) {
   state.ruleBuilderDragging = handle.dataset.builderDragId;
   state.ruleBuilderPointerId = event.pointerId;
   state.ruleBuilderDragOffset = { x: event.clientX, y: event.clientY };
+  state.ruleBuilderLastLiveDropKey = null;
   ruleBuilderPointerHandle = handle;
   try { handle.setPointerCapture(event.pointerId); } catch (error) {}
   const root = optional("#rule-builder-root");
@@ -674,13 +677,18 @@ function handleRuleBuilderPointerMove(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
   event.preventDefault();
   updateRuleBuilderGhostPosition(event.clientX, event.clientY);
-  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
+  const zone = resolveRuleBuilderDropZone(event.clientX, event.clientY);
+  const moved = liveMoveRuleBuilderNode(zone, event.clientX, event.clientY);
+  if (!moved) syncRuleBuilderActiveZone(zone);
 }
 function handleRuleBuilderPointerUp(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  const hadLiveMove = Boolean(state.ruleBuilderLastLiveDropKey);
   const zone = state.ruleBuilderActiveDropZone;
-  const moved = zone ? moveRuleBuilderNode(state.ruleBuilderDragging, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex)) : false;
-  optional("#rule-message").textContent = moved ? "已移动节点" : zone ? "无法移动到该位置" : "已取消拖拽";
+  const moved = !hadLiveMove && zone
+    ? moveRuleBuilderNode(state.ruleBuilderDragging, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex))
+    : false;
+  optional("#rule-message").textContent = hadLiveMove ? "已完成拖拽排序" : moved ? "已移动节点" : zone ? "无法移动到该位置" : "已取消拖拽";
   clearRuleBuilderDropState();
 }
 function handleRuleBuilderPointerCancel(event) {
@@ -688,9 +696,37 @@ function handleRuleBuilderPointerCancel(event) {
   clearRuleBuilderDropState();
 }
 function handleRuleBuilderLostPointerCapture(event) {
-  if (!state.ruleBuilderDragging) return;
+  if (!state.ruleBuilderDragging || state.ruleBuilderLiveRendering) return;
   if (event.target !== ruleBuilderPointerHandle) return;
   clearRuleBuilderDropState();
+}
+function liveMoveRuleBuilderNode(zone, x, y) {
+  if (!zone || !state.ruleBuilderDragging) return false;
+  const parentId = zone.dataset.builderDropParent;
+  const targetIndex = Number(zone.dataset.builderDropIndex);
+  const key = parentId + ":" + targetIndex;
+  if (state.ruleBuilderLastLiveDropKey === key) return false;
+  state.ruleBuilderLiveRendering = true;
+  let moved = false;
+  try {
+    moved = moveRuleBuilderNode(state.ruleBuilderDragging, parentId, targetIndex);
+  } finally {
+    state.ruleBuilderLiveRendering = false;
+  }
+  if (!moved) return false;
+  state.ruleBuilderLastLiveDropKey = key;
+  restoreRuleBuilderLiveDragState(x, y);
+  optional("#rule-message").textContent = "拖动中：排序已实时更新，松开完成";
+  return true;
+}
+function restoreRuleBuilderLiveDragState(x, y) {
+  optional("#rule-builder-root")?.classList.add("is-pointer-dragging");
+  document.querySelector('[data-builder-node-id="' + cssEscapeAttribute(state.ruleBuilderDragging) + '"]')?.classList.add("is-dragging-source");
+  updateRuleBuilderGhostPosition(x, y);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(x, y));
+}
+function cssEscapeAttribute(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 function resolveRuleBuilderDropZone(x, y) {
   const hits = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
@@ -736,6 +772,8 @@ function clearRuleBuilderDropState() {
   state.ruleBuilderDragging = null;
   state.ruleBuilderPointerId = null;
   state.ruleBuilderDragOffset = null;
+  state.ruleBuilderLastLiveDropKey = null;
+  state.ruleBuilderLiveRendering = false;
   syncRuleBuilderActiveZone(null);
   document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source"));
   optional("#rule-builder-root")?.classList.remove("is-pointer-dragging");
@@ -791,10 +829,14 @@ function moveRuleBuilderNode(sourceId, parentId, index) {
   if (!oldParent || oldParent.parent.op === "not") return false;
   let targetIndex = Number.isFinite(index) ? index : parent.children.length;
   if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
+  const currentParent = parent;
+  const currentLength = currentParent.children.length;
+  const safeIndex = Math.max(0, Math.min(targetIndex, currentLength));
+  if (oldParent.parent.id === currentParent.id && oldParent.index === safeIndex) return false;
   const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
-  if (!detached) return;
-  const safeIndex = Math.max(0, Math.min(targetIndex, parent.children.length));
-  parent.children.splice(safeIndex, 0, detached);
+  if (!detached) return false;
+  const insertIndex = Math.max(0, Math.min(safeIndex, currentParent.children.length));
+  currentParent.children.splice(insertIndex, 0, detached);
   renderRuleBuilder();
   return true;
 }
