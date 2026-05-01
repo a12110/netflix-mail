@@ -80,3 +80,30 @@
 
 ### 阻塞项
 - 暂无。
+
+## 2026-05-01 可视化规则条件组编辑器
+
+### 子任务清单
+- [x] 子任务 1：核验当前实现与差距
+- [x] 子任务 2：实现可视化嵌套条件组与拖拽交互
+- [x] 子任务 3：完善 UI 设计组件与可访问性
+- [x] 子任务 4：补充测试、文档、构建产物与代码评审
+- [x] 子任务 5：Git 提交准备完成，待执行 git commit
+
+### 关键决策
+- 使用原生 HTML/CSS/Vanilla JS，不引入新依赖。
+- 保持 `expression` API 不变，UI 只负责生成/编辑同一 JSON 模型。
+- JSON 输入保留为高级导入/预览，不作为主要编辑方式。
+
+
+### 验证记录
+- `yarn test test/views.test.ts` 通过：1 个测试文件 / 4 个测试。
+- `yarn run check` 通过：12 个测试文件 / 35 个测试。
+- `yarn build:gui` dry-run 完成并刷新 `dist-gui`；wrangler 写用户偏好日志因沙箱 EPERM 报警，但命令退出码为 0。
+
+### 设计系统
+- 使用 `ui-ux-pro-max` 生成 Data-Dense Dashboard 设计系统。
+- 落地重点：清晰层级、表单 label、可见 focus/hover、按钮兜底、移动端无横向滚动、尊重 reduced motion。
+
+### 阻塞项
+- 暂无。

@@ -8185,14 +8185,17 @@ pre {
 .table-wrap table { min-width: 720px; }
 .modal-card {
   width: min(680px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
   padding: 0;
   background: var(--surface-solid);
   box-shadow: var(--shadow-md);
+  overflow: hidden;
 }
+#rule-dialog { width: min(1040px, calc(100vw - 32px)); }
 .modal-card::backdrop { background: rgba(15, 23, 42, 0.38); backdrop-filter: blur(4px); }
-.modal-form { padding: 22px; }
+.modal-form { max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px; }
 .modal-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
 .list-item-card {
   display: flex;
@@ -8300,14 +8303,19 @@ pre {
 
 .rule-builder-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: linear-gradient(180deg, #ffffff, #f8fbff); box-shadow: inset 0 1px 0 rgba(255,255,255,0.75); }
 .rule-builder-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.rule-builder-summary { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #c7d2fe; border-radius: var(--radius-sm); background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 800; line-height: 1.45; }
+.rule-builder-summary.invalid { border-color: #fed7aa; background: #fff7ed; color: #c2410c; }
 .rule-builder-actions, .rule-node-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .rule-builder-actions button, .rule-node-actions button { min-height: 34px; padding: 7px 10px; font-size: 12px; }
 .rule-builder-tree { display: grid; gap: 10px; }
-.rule-node { border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.9); box-shadow: var(--shadow-sm); overflow: hidden; }
+.rule-node { border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.9); box-shadow: var(--shadow-sm); overflow: hidden; transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease; }
+.rule-node:hover, .rule-node:focus-within { border-color: rgba(99, 102, 241, 0.38); box-shadow: 0 14px 30px rgba(99, 102, 241, 0.12); }
+.rule-node.is-dragging { opacity: 0.58; border-color: var(--primary); box-shadow: 0 18px 36px rgba(11, 116, 222, 0.18); }
 .rule-node.root { border-color: rgba(11, 116, 222, 0.28); }
 .rule-node-not { border-style: dashed; border-color: #c4b5fd; background: #fbfaff; }
 .rule-node-header { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 10px; background: rgba(248, 250, 252, 0.86); border-bottom: 1px solid var(--line); }
 .rule-drag-handle { cursor: grab; min-height: 32px; padding: 6px 9px; }
+.rule-drag-handle:disabled { cursor: not-allowed; }
 .rule-drag-handle:active { cursor: grabbing; }
 .rule-inline-select { width: auto; min-height: 34px; padding: 6px 10px; }
 .rule-node-hint { color: var(--muted); font-weight: 700; }
@@ -8318,11 +8326,13 @@ pre {
 .rule-case-toggle { align-self: end; min-height: 36px; margin: 0; white-space: nowrap; }
 .rule-node-children { display: grid; gap: 8px; padding: 10px 10px 10px 24px; }
 .rule-drop-zone { min-height: 28px; border: 1px dashed transparent; border-radius: var(--radius-sm); color: transparent; display: grid; place-items: center; font-size: 12px; font-weight: 800; transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
+.rule-builder-tree.is-dragging .rule-drop-zone { border-color: rgba(99, 102, 241, 0.28); color: #6366f1; }
 .rule-drop-zone:hover, .rule-drop-zone.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
 .rule-quick { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
 .rule-quick summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
 .rule-advanced { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
 .rule-advanced summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
+.rule-quick summary:focus-visible, .rule-advanced summary:focus-visible { outline: 3px solid rgba(11, 116, 222, 0.22); outline-offset: 4px; border-radius: var(--radius-sm); }
 .danger-badge { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
 .ui-message-container { position: fixed; top: 18px; left: 50%; z-index: 9999; display: grid; gap: 10px; width: min(420px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
 .ui-message { padding: 11px 14px; border: 1px solid #bfdbfe; border-radius: var(--radius-sm); background: #fff; color: var(--primary-dark); font-weight: 800; text-align: center; box-shadow: var(--shadow-md); opacity: 0; transform: translateY(-8px); transition: opacity 180ms ease, transform 180ms ease; }
@@ -8363,6 +8373,11 @@ ${MAIL_STYLES}
   .mail-detail-view { padding: 14px; }
   .list-item-card { display: grid; }
   .item-actions { justify-content: flex-start; }
+  .rule-builder-topline { display: grid; }
+  .rule-condition-grid, .rule-grid { grid-template-columns: 1fr; }
+  .rule-node-children { padding-left: 12px; }
+  .rule-node-actions, .rule-builder-actions { width: 100%; }
+  .rule-node-actions button, .rule-builder-actions button { flex: 1 1 auto; min-height: 44px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
@@ -8573,6 +8588,7 @@ const state = {
   ruleBuilder: null,
   ruleBuilderBound: false,
   ruleBuilderDragging: null,
+  ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
@@ -8647,9 +8663,14 @@ on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
 on("#rule-builder-add-condition", "click", () => addRuleBuilderChild("condition"));
 on("#rule-builder-add-group", "click", () => addRuleBuilderChild("group"));
+on("#rule-builder-reset", "click", resetRuleBuilderToDefault);
 on("#rule-builder-quick-apply", "click", applyQuickRuleBuilderTemplate);
 on("#rule-builder-import", "click", importRuleBuilderJson);
 on("#rule-builder-copy-json", "click", copyRuleBuilderJson);
+on("#rule-expression-json", "input", () => {
+  state.ruleBuilderJsonDirty = true;
+  optional("#rule-message").textContent = "JSON 已修改；保存时会自动导入校验。";
+});
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
 });
@@ -8930,6 +8951,7 @@ function resetRuleForm() {
   form.elements.expressionJson.value = "";
   form.elements.enabled.checked = true;
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
+  setRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
   optional("#rule-form-title").textContent = "添加规则";
   optional("#rule-submit").textContent = "保存规则";
   optional("#rule-message").textContent = "";
@@ -8948,6 +8970,7 @@ function editRule(id) {
   form.elements.enabled.checked = Boolean(rule.enabled);
   form.elements.expressionJson.value = rule.expression ? JSON.stringify(rule.expression, null, 2) : "";
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = (rule.fields || []).includes(input.value); });
+  setRuleBuilderExpression(rule.expression || legacyRuleExpression(rule));
   optional("#rule-form-title").textContent = "编辑规则";
   optional("#rule-submit").textContent = "保存修改";
   showDialog("rule-dialog");
@@ -8959,6 +8982,13 @@ async function deleteRuleItem(id) {
   await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
 function readRuleExpression(form, data) {
+  if (state.ruleBuilderJsonDirty) {
+    const textarea = optional("#rule-expression-json");
+    const expression = JSON.parse(textarea?.value || "");
+    if (!isRawRuleExpressionValid(expression)) throw new Error("高级 JSON 表达式结构无效");
+    setRuleBuilderExpression(expression);
+    return expression;
+  }
   if (state.ruleBuilder) {
     const expression = stripRuleBuilderMetadata(state.ruleBuilder);
     if (isBuilderExpressionValid(expression)) return expression;
@@ -8996,6 +9026,7 @@ function nextRuleBuilderId() {
 }
 function setRuleBuilderExpression(expression) {
   state.ruleBuilder = hydrateRuleBuilderExpression(expression);
+  state.ruleBuilderJsonDirty = false;
   renderRuleBuilder();
 }
 function stripRuleBuilderMetadata(node) {
@@ -9018,6 +9049,7 @@ function renderRuleBuilder() {
   if (!state.ruleBuilder) state.ruleBuilder = defaultRuleBuilderExpression();
   root.innerHTML = renderRuleBuilderNode(state.ruleBuilder, null, 0, 0);
   syncRuleBuilderJson();
+  syncRuleBuilderSummary();
 }
 function renderRuleBuilderNode(node, parentId, depth, index) {
   const isGroup = node.op === "and" || node.op === "or";
@@ -9027,7 +9059,7 @@ function renderRuleBuilderNode(node, parentId, depth, index) {
   const canMove = Boolean(parentId);
   return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
     '<div class="rule-node-header">' +
-      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动</button>' +
+      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动节点</button>' +
       '<span class="badge muted-badge">' + escapeText(typeLabel) + '</span>' +
       renderRuleNodeControls(node) +
       '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
@@ -9051,6 +9083,7 @@ function renderRuleNodeActions(node, parentId, index, isGroup) {
   const disabledRoot = parentId ? "" : " disabled";
   return (isGroup ? '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(node.id) + '">条件</button><button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(node.id) + '">分组</button>' : '') +
     '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + (node.op === "not" ? "取消 NOT" : "设为 NOT") + '</button>' +
+    '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '"' + disabledRoot + '>复制</button>' +
     '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>上移</button>' +
     '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>下移</button>' +
     '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '"' + disabledRoot + '>删除</button>';
@@ -9105,14 +9138,18 @@ function handleRuleBuilderClick(event) {
   if (target.dataset.builderAddGroup) addRuleBuilderChild("group", target.dataset.builderAddGroup);
   if (target.dataset.builderToggleNot) toggleRuleBuilderNot(target.dataset.builderToggleNot);
   if (target.dataset.builderDelete) deleteRuleBuilderNode(target.dataset.builderDelete);
+  if (target.dataset.builderDuplicate) duplicateRuleBuilderNode(target.dataset.builderDuplicate);
   if (target.dataset.builderMove) moveRuleBuilderSibling(target.dataset.builderMoveId, target.dataset.builderMove);
 }
 function handleRuleBuilderDragStart(event) {
   const handle = event.target.closest("[data-builder-drag-id]");
-  if (!handle) return;
+  if (!handle || handle.disabled || !event.dataTransfer) return;
   state.ruleBuilderDragging = handle.dataset.builderDragId;
   event.dataTransfer.setData("text/plain", state.ruleBuilderDragging);
   event.dataTransfer.effectAllowed = "move";
+  optional("#rule-builder-root")?.classList.add("is-dragging");
+  handle.closest("[data-builder-node-id]")?.classList.add("is-dragging");
+  optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
 }
 function handleRuleBuilderDragOver(event) {
   const zone = event.target.closest("[data-builder-drop-parent]");
@@ -9130,12 +9167,15 @@ function handleRuleBuilderDrop(event) {
   if (!zone) return;
   event.preventDefault();
   const sourceId = state.ruleBuilderDragging || event.dataTransfer.getData("text/plain");
-  moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
+  const moved = moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
+  optional("#rule-message").textContent = moved ? "已移动节点" : "无法移动到该位置";
   clearRuleBuilderDropState();
 }
 function clearRuleBuilderDropState() {
   state.ruleBuilderDragging = null;
   document.querySelectorAll(".rule-drop-zone.active").forEach((zone) => zone.classList.remove("active"));
+  document.querySelectorAll(".rule-node.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
+  optional("#rule-builder-root")?.classList.remove("is-dragging");
 }
 function addRuleBuilderChild(kind, parentId) {
   ensureRuleBuilderGroupRoot();
@@ -9173,16 +9213,19 @@ function moveRuleBuilderSibling(id, direction) {
   renderRuleBuilder();
 }
 function moveRuleBuilderNode(sourceId, parentId, index) {
-  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return;
+  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return false;
+  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
+  if (!parent || (parent.op !== "and" && parent.op !== "or")) return false;
   const oldParent = findRuleBuilderParent(state.ruleBuilder, sourceId);
+  if (!oldParent || oldParent.parent.op === "not") return false;
+  let targetIndex = Number.isFinite(index) ? index : parent.children.length;
+  if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
   const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
   if (!detached) return;
-  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
-  if (!parent || (parent.op !== "and" && parent.op !== "or")) return;
-  let safeIndex = Math.max(0, Math.min(Number.isFinite(index) ? index : parent.children.length, parent.children.length));
-  if (oldParent && oldParent.parent.id === parent.id && oldParent.index < safeIndex) safeIndex -= 1;
+  const safeIndex = Math.max(0, Math.min(targetIndex, parent.children.length));
   parent.children.splice(safeIndex, 0, detached);
   renderRuleBuilder();
+  return true;
 }
 function findRuleBuilderNode(node, id) {
   if (!node || !id) return null;
@@ -9233,20 +9276,51 @@ function isRuleBuilderDescendant(sourceId, possibleDescendantId) {
 function cloneRuleBuilderNode(node) {
   return hydrateRuleBuilderExpression(stripRuleBuilderMetadata(node));
 }
+function duplicateRuleBuilderNode(id) {
+  const found = findRuleBuilderParent(state.ruleBuilder, id);
+  if (!found || found.parent.op === "not") return;
+  found.parent.children.splice(found.index + 1, 0, cloneRuleBuilderNode(found.parent.children[found.index]));
+  renderRuleBuilder();
+}
+function resetRuleBuilderToDefault() {
+  setRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
+  optional("#rule-message").textContent = "已重置可视化条件组";
+}
 function syncRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
   if (!textarea || !state.ruleBuilder) return;
   textarea.value = JSON.stringify(stripRuleBuilderMetadata(state.ruleBuilder), null, 2);
+  state.ruleBuilderJsonDirty = false;
+  syncRuleBuilderSummary();
+}
+function syncRuleBuilderSummary() {
+  const summary = optional("#rule-builder-summary");
+  if (!summary || !state.ruleBuilder) return;
+  const expression = stripRuleBuilderMetadata(state.ruleBuilder);
+  const valid = isBuilderExpressionValid(expression);
+  summary.textContent = valid ? "当前表达式：" + summarizeRuleExpression(expression) : "当前表达式未完善：请补全字段和值";
+  summary.classList.toggle("invalid", !valid);
 }
 function importRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
   if (!textarea) return;
   try {
-    setRuleBuilderExpression(JSON.parse(textarea.value));
+    const expression = JSON.parse(textarea.value);
+    if (!isRawRuleExpressionValid(expression)) throw new Error("表达式结构无效");
+    setRuleBuilderExpression(expression);
     optional("#rule-message").textContent = "已导入 JSON";
   } catch (error) {
     optional("#rule-message").textContent = "JSON 格式错误：" + error.message;
   }
+}
+function isRawRuleExpressionValid(expression) {
+  if (!expression || typeof expression !== "object") return false;
+  if (expression.op === "condition") {
+    return RULE_FIELD_OPTIONS.includes(expression.field) && RULE_OPERATOR_OPTIONS.includes(expression.operator) && String(expression.value || "").trim().length > 0;
+  }
+  if (expression.op === "not") return isRawRuleExpressionValid(expression.child);
+  if (expression.op !== "and" && expression.op !== "or") return false;
+  return Array.isArray(expression.children) && expression.children.length > 0 && expression.children.every(isRawRuleExpressionValid);
 }
 async function copyRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
@@ -9653,19 +9727,20 @@ function databaseSection() {
 }
 __name(databaseSection, "databaseSection");
 function ruleForm() {
-  return String.raw`<dialog id="rule-dialog" class="modal-card">
+  return String.raw`<dialog id="rule-dialog" class="modal-card" aria-labelledby="rule-form-title">
 <form id="rule-form" class="modal-form">
   <input type="hidden" name="id">
   <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
   <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
   <label>规则类型</label>
   <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
-  <div class="rule-builder-panel" aria-label="可视化条件组编辑器">
+  <div class="rule-builder-panel" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
     <div class="rule-builder-topline">
-      <div><strong>可视化条件组</strong><p class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
-      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button></div>
+      <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
+      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
     </div>
-    <div id="rule-builder-root" class="rule-builder-tree" aria-live="polite"></div>
+    <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
+    <div id="rule-builder-root" class="rule-builder-tree" aria-label="规则条件树"></div>
   </div>
   <details class="rule-quick"><summary>批量生成条件</summary>
     <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
@@ -9688,7 +9763,7 @@ function ruleForm() {
   </details>
   <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
-  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
+  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted" role="status" aria-live="polite"></span></div>
 </form>
 </dialog>`;
 }

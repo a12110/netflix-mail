@@ -165,19 +165,20 @@ function databaseSection(): string {
 }
 
 function ruleForm(): string {
-  return String.raw`<dialog id="rule-dialog" class="modal-card">
+  return String.raw`<dialog id="rule-dialog" class="modal-card" aria-labelledby="rule-form-title">
 <form id="rule-form" class="modal-form">
   <input type="hidden" name="id">
   <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
   <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
   <label>规则类型</label>
   <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
-  <div class="rule-builder-panel" aria-label="可视化条件组编辑器">
+  <div class="rule-builder-panel" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
     <div class="rule-builder-topline">
-      <div><strong>可视化条件组</strong><p class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
-      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button></div>
+      <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
+      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
     </div>
-    <div id="rule-builder-root" class="rule-builder-tree" aria-live="polite"></div>
+    <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
+    <div id="rule-builder-root" class="rule-builder-tree" aria-label="规则条件树"></div>
   </div>
   <details class="rule-quick"><summary>批量生成条件</summary>
     <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
@@ -200,7 +201,7 @@ function ruleForm(): string {
   </details>
   <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
   <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
-  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted"></span></div>
+  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted" role="status" aria-live="polite"></span></div>
 </form>
 </dialog>`;
 }

@@ -18,6 +18,7 @@ const state = {
   ruleBuilder: null,
   ruleBuilderBound: false,
   ruleBuilderDragging: null,
+  ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
@@ -92,9 +93,14 @@ on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
 on("#rule-builder-add-condition", "click", () => addRuleBuilderChild("condition"));
 on("#rule-builder-add-group", "click", () => addRuleBuilderChild("group"));
+on("#rule-builder-reset", "click", resetRuleBuilderToDefault);
 on("#rule-builder-quick-apply", "click", applyQuickRuleBuilderTemplate);
 on("#rule-builder-import", "click", importRuleBuilderJson);
 on("#rule-builder-copy-json", "click", copyRuleBuilderJson);
+on("#rule-expression-json", "input", () => {
+  state.ruleBuilderJsonDirty = true;
+  optional("#rule-message").textContent = "JSON 已修改；保存时会自动导入校验。";
+});
 document.querySelectorAll("[data-close-dialog]").forEach((button) => {
   button.addEventListener("click", () => closeDialog(button.dataset.closeDialog));
 });
@@ -375,6 +381,7 @@ function resetRuleForm() {
   form.elements.expressionJson.value = "";
   form.elements.enabled.checked = true;
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = ["subject", "text", "code"].includes(input.value); });
+  setRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
   optional("#rule-form-title").textContent = "添加规则";
   optional("#rule-submit").textContent = "保存规则";
   optional("#rule-message").textContent = "";
@@ -393,6 +400,7 @@ function editRule(id) {
   form.elements.enabled.checked = Boolean(rule.enabled);
   form.elements.expressionJson.value = rule.expression ? JSON.stringify(rule.expression, null, 2) : "";
   form.querySelectorAll('input[name="fields"]').forEach((input) => { input.checked = (rule.fields || []).includes(input.value); });
+  setRuleBuilderExpression(rule.expression || legacyRuleExpression(rule));
   optional("#rule-form-title").textContent = "编辑规则";
   optional("#rule-submit").textContent = "保存修改";
   showDialog("rule-dialog");
@@ -404,6 +412,13 @@ async function deleteRuleItem(id) {
   await Promise.all([loadRules(), currentPage === "share" ? loadLinks() : Promise.resolve()]);
 }
 function readRuleExpression(form, data) {
+  if (state.ruleBuilderJsonDirty) {
+    const textarea = optional("#rule-expression-json");
+    const expression = JSON.parse(textarea?.value || "");
+    if (!isRawRuleExpressionValid(expression)) throw new Error("高级 JSON 表达式结构无效");
+    setRuleBuilderExpression(expression);
+    return expression;
+  }
   if (state.ruleBuilder) {
     const expression = stripRuleBuilderMetadata(state.ruleBuilder);
     if (isBuilderExpressionValid(expression)) return expression;
@@ -441,6 +456,7 @@ function nextRuleBuilderId() {
 }
 function setRuleBuilderExpression(expression) {
   state.ruleBuilder = hydrateRuleBuilderExpression(expression);
+  state.ruleBuilderJsonDirty = false;
   renderRuleBuilder();
 }
 function stripRuleBuilderMetadata(node) {
@@ -463,6 +479,7 @@ function renderRuleBuilder() {
   if (!state.ruleBuilder) state.ruleBuilder = defaultRuleBuilderExpression();
   root.innerHTML = renderRuleBuilderNode(state.ruleBuilder, null, 0, 0);
   syncRuleBuilderJson();
+  syncRuleBuilderSummary();
 }
 function renderRuleBuilderNode(node, parentId, depth, index) {
   const isGroup = node.op === "and" || node.op === "or";
@@ -472,7 +489,7 @@ function renderRuleBuilderNode(node, parentId, depth, index) {
   const canMove = Boolean(parentId);
   return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
     '<div class="rule-node-header">' +
-      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动</button>' +
+      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动节点</button>' +
       '<span class="badge muted-badge">' + escapeText(typeLabel) + '</span>' +
       renderRuleNodeControls(node) +
       '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
@@ -496,6 +513,7 @@ function renderRuleNodeActions(node, parentId, index, isGroup) {
   const disabledRoot = parentId ? "" : " disabled";
   return (isGroup ? '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(node.id) + '">条件</button><button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(node.id) + '">分组</button>' : '') +
     '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + (node.op === "not" ? "取消 NOT" : "设为 NOT") + '</button>' +
+    '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '"' + disabledRoot + '>复制</button>' +
     '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>上移</button>' +
     '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>下移</button>' +
     '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '"' + disabledRoot + '>删除</button>';
@@ -550,14 +568,18 @@ function handleRuleBuilderClick(event) {
   if (target.dataset.builderAddGroup) addRuleBuilderChild("group", target.dataset.builderAddGroup);
   if (target.dataset.builderToggleNot) toggleRuleBuilderNot(target.dataset.builderToggleNot);
   if (target.dataset.builderDelete) deleteRuleBuilderNode(target.dataset.builderDelete);
+  if (target.dataset.builderDuplicate) duplicateRuleBuilderNode(target.dataset.builderDuplicate);
   if (target.dataset.builderMove) moveRuleBuilderSibling(target.dataset.builderMoveId, target.dataset.builderMove);
 }
 function handleRuleBuilderDragStart(event) {
   const handle = event.target.closest("[data-builder-drag-id]");
-  if (!handle) return;
+  if (!handle || handle.disabled || !event.dataTransfer) return;
   state.ruleBuilderDragging = handle.dataset.builderDragId;
   event.dataTransfer.setData("text/plain", state.ruleBuilderDragging);
   event.dataTransfer.effectAllowed = "move";
+  optional("#rule-builder-root")?.classList.add("is-dragging");
+  handle.closest("[data-builder-node-id]")?.classList.add("is-dragging");
+  optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
 }
 function handleRuleBuilderDragOver(event) {
   const zone = event.target.closest("[data-builder-drop-parent]");
@@ -575,12 +597,15 @@ function handleRuleBuilderDrop(event) {
   if (!zone) return;
   event.preventDefault();
   const sourceId = state.ruleBuilderDragging || event.dataTransfer.getData("text/plain");
-  moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
+  const moved = moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
+  optional("#rule-message").textContent = moved ? "已移动节点" : "无法移动到该位置";
   clearRuleBuilderDropState();
 }
 function clearRuleBuilderDropState() {
   state.ruleBuilderDragging = null;
   document.querySelectorAll(".rule-drop-zone.active").forEach((zone) => zone.classList.remove("active"));
+  document.querySelectorAll(".rule-node.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
+  optional("#rule-builder-root")?.classList.remove("is-dragging");
 }
 function addRuleBuilderChild(kind, parentId) {
   ensureRuleBuilderGroupRoot();
@@ -618,16 +643,19 @@ function moveRuleBuilderSibling(id, direction) {
   renderRuleBuilder();
 }
 function moveRuleBuilderNode(sourceId, parentId, index) {
-  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return;
+  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return false;
+  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
+  if (!parent || (parent.op !== "and" && parent.op !== "or")) return false;
   const oldParent = findRuleBuilderParent(state.ruleBuilder, sourceId);
+  if (!oldParent || oldParent.parent.op === "not") return false;
+  let targetIndex = Number.isFinite(index) ? index : parent.children.length;
+  if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
   const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
   if (!detached) return;
-  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
-  if (!parent || (parent.op !== "and" && parent.op !== "or")) return;
-  let safeIndex = Math.max(0, Math.min(Number.isFinite(index) ? index : parent.children.length, parent.children.length));
-  if (oldParent && oldParent.parent.id === parent.id && oldParent.index < safeIndex) safeIndex -= 1;
+  const safeIndex = Math.max(0, Math.min(targetIndex, parent.children.length));
   parent.children.splice(safeIndex, 0, detached);
   renderRuleBuilder();
+  return true;
 }
 function findRuleBuilderNode(node, id) {
   if (!node || !id) return null;
@@ -678,20 +706,51 @@ function isRuleBuilderDescendant(sourceId, possibleDescendantId) {
 function cloneRuleBuilderNode(node) {
   return hydrateRuleBuilderExpression(stripRuleBuilderMetadata(node));
 }
+function duplicateRuleBuilderNode(id) {
+  const found = findRuleBuilderParent(state.ruleBuilder, id);
+  if (!found || found.parent.op === "not") return;
+  found.parent.children.splice(found.index + 1, 0, cloneRuleBuilderNode(found.parent.children[found.index]));
+  renderRuleBuilder();
+}
+function resetRuleBuilderToDefault() {
+  setRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
+  optional("#rule-message").textContent = "已重置可视化条件组";
+}
 function syncRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
   if (!textarea || !state.ruleBuilder) return;
   textarea.value = JSON.stringify(stripRuleBuilderMetadata(state.ruleBuilder), null, 2);
+  state.ruleBuilderJsonDirty = false;
+  syncRuleBuilderSummary();
+}
+function syncRuleBuilderSummary() {
+  const summary = optional("#rule-builder-summary");
+  if (!summary || !state.ruleBuilder) return;
+  const expression = stripRuleBuilderMetadata(state.ruleBuilder);
+  const valid = isBuilderExpressionValid(expression);
+  summary.textContent = valid ? "当前表达式：" + summarizeRuleExpression(expression) : "当前表达式未完善：请补全字段和值";
+  summary.classList.toggle("invalid", !valid);
 }
 function importRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
   if (!textarea) return;
   try {
-    setRuleBuilderExpression(JSON.parse(textarea.value));
+    const expression = JSON.parse(textarea.value);
+    if (!isRawRuleExpressionValid(expression)) throw new Error("表达式结构无效");
+    setRuleBuilderExpression(expression);
     optional("#rule-message").textContent = "已导入 JSON";
   } catch (error) {
     optional("#rule-message").textContent = "JSON 格式错误：" + error.message;
   }
+}
+function isRawRuleExpressionValid(expression) {
+  if (!expression || typeof expression !== "object") return false;
+  if (expression.op === "condition") {
+    return RULE_FIELD_OPTIONS.includes(expression.field) && RULE_OPERATOR_OPTIONS.includes(expression.operator) && String(expression.value || "").trim().length > 0;
+  }
+  if (expression.op === "not") return isRawRuleExpressionValid(expression.child);
+  if (expression.op !== "and" && expression.op !== "or") return false;
+  return Array.isArray(expression.children) && expression.children.length > 0 && expression.children.every(isRawRuleExpressionValid);
 }
 async function copyRuleBuilderJson() {
   const textarea = optional("#rule-expression-json");
