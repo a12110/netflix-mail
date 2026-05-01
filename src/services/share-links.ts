@@ -1,5 +1,5 @@
 import { DEFAULT_WINDOW_MINUTES } from "../constants";
-import type { ShareLinkRow } from "../types";
+import type { ShareLinkRow, ShareLinkRuleLogic } from "../types";
 import { randomToken, sha256Base64Url } from "../utils/encoding";
 import { isPastIso, nowIso } from "../utils/time";
 
@@ -12,6 +12,8 @@ export interface CreateShareLinkInput {
   expiresAt?: string | null;
   ruleIds: number[];
   adminId: number;
+  allowRuleLogic?: ShareLinkRuleLogic;
+  blockRuleLogic?: ShareLinkRuleLogic;
 }
 
 export interface UpdateShareLinkInput {
@@ -19,6 +21,8 @@ export interface UpdateShareLinkInput {
   expiresAt?: string | null;
   ruleIds?: number[];
   status?: "active" | "disabled";
+  allowRuleLogic?: ShareLinkRuleLogic;
+  blockRuleLogic?: ShareLinkRuleLogic;
 }
 
 export async function hashShareToken(token: string): Promise<string> {
@@ -33,10 +37,22 @@ export async function createShareLink(db: D1Database, input: CreateShareLinkInpu
   const tokenHash = await hashShareToken(token);
   const result = await db
     .prepare(
-      `INSERT INTO share_links (name, token, token_hash, expires_at, status, window_minutes, created_by_admin_id)
-       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)`
+      `INSERT INTO share_links (
+         name, token, token_hash, expires_at, status, window_minutes,
+         allow_rule_logic, block_rule_logic, created_by_admin_id
+       )
+       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8)`
     )
-    .bind(input.name ?? null, token, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId)
+    .bind(
+      input.name ?? null,
+      token,
+      tokenHash,
+      input.expiresAt ?? null,
+      DEFAULT_WINDOW_MINUTES,
+      input.allowRuleLogic ?? "or",
+      input.blockRuleLogic ?? "or",
+      input.adminId
+    )
     .run();
   const id = Number(result.meta.last_row_id);
   await db.batch(
@@ -62,6 +78,8 @@ export async function updateShareLink(db: D1Database, id: number, input: UpdateS
   addShareLinkUpdate(updates, values, "name", input.name);
   addShareLinkUpdate(updates, values, "expires_at", input.expiresAt);
   addShareLinkUpdate(updates, values, "status", input.status);
+  addShareLinkUpdate(updates, values, "allow_rule_logic", input.allowRuleLogic);
+  addShareLinkUpdate(updates, values, "block_rule_logic", input.blockRuleLogic);
   if (updates.length > 0) {
     values.push(id);
     await db.prepare(`UPDATE share_links SET ${updates.join(", ")} WHERE id = ?${values.length}`).bind(...values).run();

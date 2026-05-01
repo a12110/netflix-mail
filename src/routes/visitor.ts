@@ -29,7 +29,12 @@ async function visitorEmails(c: Context<AppEnv>): Promise<Response> {
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
   const matchedEmails = candidates
-    .filter((email) => evaluateRuleSet(emailDetailToRuleInput(email), rules).visible)
+    .filter((email) =>
+      evaluateRuleSet(emailDetailToRuleInput(email), rules, {
+        allowRuleLogic: link.allow_rule_logic,
+        blockRuleLogic: link.block_rule_logic
+      }).visible
+    )
     .map((email) => ({
       subject: email.subject,
       receivedAt: email.received_at,

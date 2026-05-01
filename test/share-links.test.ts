@@ -10,6 +10,8 @@ const link: ShareLinkRow = {
   expires_at: null,
   status: "active",
   window_minutes: 30,
+  allow_rule_logic: "or",
+  block_rule_logic: "or",
   created_by_admin_id: 1,
   created_at: "2026-04-28T00:00:00.000Z",
   last_accessed_at: null

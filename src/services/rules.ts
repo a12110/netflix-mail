@@ -1,8 +1,9 @@
 import { RULE_FIELDS } from "../constants";
-import type { RuleField, RuleRow } from "../types";
+import type { RuleField, RuleRow, ShareLinkRuleLogic } from "../types";
 
 export type RuleAction = "allow" | "block";
 export type RuleOperator = "contains" | "exact" | "startsWith" | "endsWith" | "regex";
+export type RuleLogicInput = "any" | "all" | "or" | "and";
 export type RuleExpression =
   | { op: "condition"; field: RuleField; operator: RuleOperator; value: string; caseSensitive?: boolean }
   | { op: "and" | "or"; children: RuleExpression[] }
@@ -13,6 +14,8 @@ export interface RuleInput {
   keyword: string;
   keywords: string[];
   fields: RuleField[];
+  keywordLogic?: RuleLogicInput;
+  fieldLogic?: RuleLogicInput;
   matchMode?: "contains" | "exact";
   caseSensitive?: boolean;
   enabled?: boolean;
@@ -36,6 +39,11 @@ export interface RuleSetEvaluation {
   visible: boolean;
   matchedAllowRuleIds: number[];
   matchedBlockRuleIds: number[];
+}
+
+export interface RuleSetEvaluationOptions {
+  allowRuleLogic?: ShareLinkRuleLogic;
+  blockRuleLogic?: ShareLinkRuleLogic;
 }
 
 const DEFAULT_RULE_FIELDS: RuleField[] = ["subject", "text", "html", "code"];
@@ -161,17 +169,30 @@ export function matchesAnyRule(email: EmailForRuleMatching, rules: RuleRow[]): b
   return rules.some((rule) => matchesRule(email, rule));
 }
 
-export function evaluateRuleSet(email: EmailForRuleMatching, rules: RuleRow[]): RuleSetEvaluation {
+export function evaluateRuleSet(email: EmailForRuleMatching, rules: RuleRow[], options: RuleSetEvaluationOptions = {}): RuleSetEvaluation {
+  const allowRuleLogic = options.allowRuleLogic ?? "or";
+  const blockRuleLogic = options.blockRuleLogic ?? "or";
+  const enabledRules = rules.filter((rule) => Boolean(rule.enabled));
+  const allowRules = enabledRules.filter((rule) => ruleAction(rule) === "allow");
+  const blockRules = enabledRules.filter((rule) => ruleAction(rule) === "block");
   const matchedAllowRuleIds: number[] = [];
   const matchedBlockRuleIds: number[] = [];
-  for (const rule of rules) {
+  for (const rule of allowRules) {
     if (!matchesRule(email, rule)) continue;
-    if (ruleAction(rule) === "block") matchedBlockRuleIds.push(rule.id);
-    else matchedAllowRuleIds.push(rule.id);
+    matchedAllowRuleIds.push(rule.id);
   }
-  const allowed = matchedAllowRuleIds.length > 0;
-  const blocked = matchedBlockRuleIds.length > 0;
+  for (const rule of blockRules) {
+    if (!matchesRule(email, rule)) continue;
+    matchedBlockRuleIds.push(rule.id);
+  }
+  const allowed = evaluateRuleGroupMatch(allowRules.length, matchedAllowRuleIds.length, allowRuleLogic);
+  const blocked = evaluateRuleGroupMatch(blockRules.length, matchedBlockRuleIds.length, blockRuleLogic);
   return { allowed, blocked, visible: allowed && !blocked, matchedAllowRuleIds, matchedBlockRuleIds };
+}
+
+export function normalizeShareLinkRuleLogic(value: unknown, fallback: ShareLinkRuleLogic = "or"): ShareLinkRuleLogic {
+  if (value === "and" || value === "or") return value;
+  return fallback;
 }
 
 export function extractExpressionKeywords(expression: RuleExpression): string[] {
@@ -215,10 +236,12 @@ function legacyExpressionFromInput(input: Partial<RuleInput>, caseSensitive: boo
   const keywords = input.keywords?.length ? input.keywords : parseRuleKeywords(input.keyword);
   if (fields.length === 0 || keywords.length === 0) return null;
   const operator: RuleOperator = input.matchMode === "exact" ? "exact" : "contains";
+  const keywordLogic = normalizeRuleLogic(input.keywordLogic, "or");
+  const fieldLogic = normalizeRuleLogic(input.fieldLogic, "or");
   const keywordGroups = keywords
-    .map((keyword) => expressionGroup("or", fields.map((field) => ({ op: "condition", field, operator, value: keyword, caseSensitive }))))
+    .map((keyword) => expressionGroup(fieldLogic, fields.map((field) => ({ op: "condition", field, operator, value: keyword, caseSensitive }))))
     .filter((group): group is RuleExpression => Boolean(group));
-  return expressionGroup("or", keywordGroups);
+  return expressionGroup(keywordLogic, keywordGroups);
 }
 
 function legacyExpressionFromRule(rule: RuleRow): RuleExpression {
@@ -289,6 +312,17 @@ function normalize(value: string, caseSensitive: boolean): string {
 function expressionGroup(op: "and" | "or", children: RuleExpression[]): RuleExpression | null {
   if (children.length === 0) return null;
   return children.length === 1 ? children[0] : { op, children };
+}
+
+function normalizeRuleLogic(value: unknown, fallback: "and" | "or"): "and" | "or" {
+  if (value === "all" || value === "and") return "and";
+  if (value === "any" || value === "or") return "or";
+  return fallback;
+}
+
+function evaluateRuleGroupMatch(totalRuleCount: number, matchedRuleCount: number, logic: ShareLinkRuleLogic): boolean {
+  if (totalRuleCount === 0) return false;
+  return logic === "and" ? matchedRuleCount === totalRuleCount : matchedRuleCount > 0;
 }
 
 function parseJson(value: string | null | undefined): unknown {

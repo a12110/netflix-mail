@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS share_links (
   expires_at TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   window_minutes INTEGER NOT NULL DEFAULT 30,
+  allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or')),
+  block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or')),
   created_by_admin_id INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   last_accessed_at TEXT,
@@ -130,7 +132,6 @@ CREATE INDEX IF NOT EXISTS idx_emails_envelope_to ON emails(envelope_to);
 CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email_id);
 CREATE INDEX IF NOT EXISTS idx_email_codes_code ON email_codes(code);
 CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled);
-CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
 CREATE INDEX IF NOT EXISTS idx_share_links_status ON share_links(status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at DESC);
 `;
@@ -147,10 +148,16 @@ ALTER TABLE rules ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 2;
 CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
 `;
 
+const SHARE_LINK_RULE_LOGIC_SQL = String.raw`
+ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or'));
+ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'));
+`;
+
 export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
   { id: "0001_initial", version: "v0.0.1", description: "初始化核心表、索引与访问日志", sql: INITIAL_SCHEMA_SQL },
   { id: "0002_share_link_token", version: "v0.0.2", description: "保存分享链接 token 以便后台重新复制", sql: SHARE_LINK_TOKEN_SQL },
-  { id: "0003_rule_expressions", version: "v0.0.3", description: "支持规则白黑名单与高级表达式", sql: RULE_EXPRESSIONS_SQL }
+  { id: "0003_rule_expressions", version: "v0.0.3", description: "支持规则白黑名单与高级表达式", sql: RULE_EXPRESSIONS_SQL },
+  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "支持分享链接允许/排除规则组合逻辑", sql: SHARE_LINK_RULE_LOGIC_SQL }
 ];
 
 const UNINITIALIZED_DATABASE_VERSION = "未初始化";
@@ -195,6 +202,9 @@ async function buildDatabaseResult(
 }
 
 async function currentVersionFromSchema(db: D1Database, migrations: DatabaseMigrationStatus[]): Promise<string> {
+  if ((await columnExists(db, "share_links", "allow_rule_logic")) && (await columnExists(db, "share_links", "block_rule_logic"))) {
+    return migrationVersion("0004_share_link_rule_logic");
+  }
   if (await columnExists(db, "rules", "expression_json")) {
     return migrationVersion("0003_rule_expressions");
   }
@@ -228,6 +238,10 @@ async function applyMigration(db: D1Database, migration: DatabaseMigration): Pro
     await applyRuleExpressionsMigration(db);
     return;
   }
+  if (migration.id === "0004_share_link_rule_logic") {
+    await applyShareLinkRuleLogicMigration(db);
+    return;
+  }
   await runSqlStatements(db, migration.sql);
 }
 
@@ -249,6 +263,19 @@ async function applyRuleExpressionsMigration(db: D1Database): Promise<void> {
     await db.prepare("ALTER TABLE rules ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 2").run();
   }
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled)").run();
+}
+
+async function applyShareLinkRuleLogicMigration(db: D1Database): Promise<void> {
+  if (!(await columnExists(db, "share_links", "allow_rule_logic"))) {
+    await db
+      .prepare("ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or'))")
+      .run();
+  }
+  if (!(await columnExists(db, "share_links", "block_rule_logic"))) {
+    await db
+      .prepare("ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'))")
+      .run();
+  }
 }
 
 async function ensureMigrationTable(db: D1Database): Promise<void> {

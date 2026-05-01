@@ -13,9 +13,20 @@ import {
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
-import { createRule, deleteRule, getRulesByIds, listRules, parseRuleFields, ruleAction, ruleExpression, sanitizeRuleInput, updateRule } from "../services/rules";
+import {
+  createRule,
+  deleteRule,
+  getRulesByIds,
+  listRules,
+  normalizeShareLinkRuleLogic,
+  parseRuleFields,
+  ruleAction,
+  ruleExpression,
+  sanitizeRuleInput,
+  updateRule
+} from "../services/rules";
 import { createShareLink, deleteShareLink, listShareLinks, resetShareLinkToken, updateShareLink } from "../services/share-links";
-import type { AdminRow, AppEnv } from "../types";
+import type { AdminRow, AppEnv, ShareLinkRuleLogic } from "../types";
 import { badRequest, clampNumber, forbidden, notFound, readJson, unauthorized } from "../utils/http";
 import { timingSafeEqual } from "../utils/encoding";
 
@@ -33,6 +44,8 @@ interface ShareLinkBody {
   expiresAt?: string | null;
   ruleIds?: number[];
   status?: "active" | "disabled";
+  allowRuleLogic?: ShareLinkRuleLogic;
+  blockRuleLogic?: ShareLinkRuleLogic;
 }
 
 export function registerAdminRoutes(app: Hono<AppEnv>): void {
@@ -178,6 +191,9 @@ async function adminListShareLinks(c: Context<AppEnv>): Promise<Response> {
 
 async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promise<Response> {
   const body = await readJson<ShareLinkBody>(c);
+  if (!isValidOptionalShareRuleLogic(body?.allowRuleLogic) || !isValidOptionalShareRuleLogic(body?.blockRuleLogic)) {
+    return badRequest(c, "allowRuleLogic and blockRuleLogic must be 'and' or 'or'.");
+  }
   const ruleIds = body?.ruleIds?.filter(Number.isInteger) ?? [];
   if (ruleIds.length === 0) {
     return badRequest(c, "At least one rule is required.");
@@ -194,7 +210,9 @@ async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promis
     name: body?.name?.trim() || null,
     expiresAt: normalizeExpiresAt(body?.expiresAt),
     ruleIds: uniqueRuleIds,
-    adminId: admin.id
+    adminId: admin.id,
+    allowRuleLogic: normalizeShareLinkRuleLogic(body?.allowRuleLogic),
+    blockRuleLogic: normalizeShareLinkRuleLogic(body?.blockRuleLogic)
   });
   const url = new URL(`/v/${created.token}`, c.req.url).toString();
   await writeAccessLog(c.env.DB, {
@@ -209,7 +227,10 @@ async function adminCreateShareLink(c: Context<AppEnv>, admin: AdminRow): Promis
 async function adminUpdateShareLink(c: Context<AppEnv>): Promise<Response> {
   const id = Number(c.req.param("id"));
   const body = await readJson<ShareLinkBody>(c) ?? {};
-  if (!Number.isInteger(id) || !isValidShareStatus(body.status)) {
+  if (!Number.isInteger(id) || !isValidShareStatus(body.status) || !isValidOptionalShareRuleLogic(body.allowRuleLogic)) {
+    return badRequest(c, "Invalid share link update.");
+  }
+  if (!isValidOptionalShareRuleLogic(body.blockRuleLogic)) {
     return badRequest(c, "Invalid share link update.");
   }
   const update = await buildShareLinkUpdate(c, body);
@@ -279,6 +300,8 @@ function publicShareLink(c: Context<AppEnv>, link: Awaited<ReturnType<typeof lis
     created_at: link.created_at,
     last_accessed_at: link.last_accessed_at,
     ruleIds: link.ruleIds,
+    allowRuleLogic: normalizeShareLinkRuleLogic(link.allow_rule_logic),
+    blockRuleLogic: normalizeShareLinkRuleLogic(link.block_rule_logic),
     url: link.token ? new URL(`/v/${link.token}`, c.req.url).toString() : null
   };
 }
@@ -299,16 +322,24 @@ function isValidShareStatus(status: ShareLinkBody["status"]): boolean {
   return status === undefined || status === "active" || status === "disabled";
 }
 
+function isValidOptionalShareRuleLogic(value: unknown): value is ShareLinkRuleLogic | undefined {
+  return value === undefined || value === "and" || value === "or";
+}
+
 async function buildShareLinkUpdate(c: Context<AppEnv>, body: ShareLinkBody) {
   const update: {
     name?: string | null;
     expiresAt?: string | null;
     ruleIds?: number[];
     status?: "active" | "disabled";
+    allowRuleLogic?: ShareLinkRuleLogic;
+    blockRuleLogic?: ShareLinkRuleLogic;
   } = {};
   if ("name" in body) update.name = body.name?.trim() || null;
   if ("expiresAt" in body) update.expiresAt = normalizeExpiresAt(body.expiresAt);
   if (body.status) update.status = body.status;
+  if ("allowRuleLogic" in body) update.allowRuleLogic = normalizeShareLinkRuleLogic(body.allowRuleLogic);
+  if ("blockRuleLogic" in body) update.blockRuleLogic = normalizeShareLinkRuleLogic(body.blockRuleLogic);
   if (Array.isArray(body.ruleIds)) {
     const ruleIds = body.ruleIds.filter(Number.isInteger);
     if (ruleIds.length === 0) return null;

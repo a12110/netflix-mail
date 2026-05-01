@@ -65,6 +65,34 @@ describe("rules", () => {
     expect(evaluateRuleSet(email, [block])).toMatchObject({ allowed: false, blocked: true, visible: false });
   });
 
+  it("evaluates share-link allow rules with OR and AND logic", () => {
+    const subjectRule = { ...baseRule, id: 1, action: "allow" as const, keyword: "Netflix" };
+    const codeRule = { ...baseRule, id: 2, action: "allow" as const, fields_json: JSON.stringify(["code"]), keyword: "123456", match_mode: "exact" as const };
+    const missRule = { ...baseRule, id: 3, action: "allow" as const, keyword: "Disney" };
+
+    expect(evaluateRuleSet(email, [subjectRule, missRule], { allowRuleLogic: "or" })).toMatchObject({ allowed: true, visible: true });
+    expect(evaluateRuleSet(email, [subjectRule, missRule], { allowRuleLogic: "and" })).toMatchObject({ allowed: false, visible: false });
+    expect(evaluateRuleSet(email, [subjectRule, codeRule], { allowRuleLogic: "and" })).toMatchObject({ allowed: true, visible: true });
+  });
+
+  it("evaluates share-link block rules with OR and AND logic", () => {
+    const allow = { ...baseRule, id: 1, action: "allow" as const };
+    const subjectBlock = { ...baseRule, id: 2, action: "block" as const, keyword: "temporary access" };
+    const missBlock = { ...baseRule, id: 3, action: "block" as const, keyword: "phishing" };
+    const codeBlock = { ...baseRule, id: 4, action: "block" as const, fields_json: JSON.stringify(["code"]), keyword: "123456", match_mode: "exact" as const };
+
+    expect(evaluateRuleSet(email, [allow, subjectBlock, missBlock], { blockRuleLogic: "or" })).toMatchObject({ blocked: true, visible: false });
+    expect(evaluateRuleSet(email, [allow, subjectBlock, missBlock], { blockRuleLogic: "and" })).toMatchObject({ blocked: false, visible: true });
+    expect(evaluateRuleSet(email, [allow, subjectBlock, codeBlock], { blockRuleLogic: "and" })).toMatchObject({ blocked: true, visible: false });
+  });
+
+  it("does not count disabled rules toward share-link AND logic", () => {
+    const allow = { ...baseRule, id: 1, action: "allow" as const };
+    const disabledMiss = { ...baseRule, id: 2, action: "allow" as const, enabled: 0, keyword: "Disney" };
+
+    expect(evaluateRuleSet(email, [allow, disabledMiss], { allowRuleLogic: "and" })).toMatchObject({ allowed: true, visible: true });
+  });
+
   it("matches nested expression rules", () => {
     const rule = {
       ...baseRule,
@@ -78,6 +106,56 @@ describe("rules", () => {
     };
 
     expect(matchesRule(email, rule)).toBe(true);
+  });
+
+  it("evaluates AND and OR expression branches distinctly", () => {
+    const andRule = {
+      ...baseRule,
+      expression_json: JSON.stringify({
+        op: "and",
+        children: [
+          { op: "condition", field: "subject", operator: "contains", value: "Netflix" },
+          { op: "condition", field: "code", operator: "exact", value: "000000" }
+        ]
+      })
+    };
+    const orRule = {
+      ...baseRule,
+      expression_json: JSON.stringify({
+        op: "or",
+        children: [
+          { op: "condition", field: "subject", operator: "contains", value: "Netflix" },
+          { op: "condition", field: "code", operator: "exact", value: "000000" }
+        ]
+      })
+    };
+
+    expect(matchesRule(email, andRule)).toBe(false);
+    expect(matchesRule(email, orRule)).toBe(true);
+  });
+
+  it("honors legacy quick-rule AND/OR logic when no expression JSON is provided", () => {
+    const anyFieldAllKeywords = sanitizeRuleInput({
+      name: "Quick AND",
+      action: "allow",
+      keyword: "Netflix\n123456",
+      fields: ["subject", "code"],
+      keywordLogic: "all",
+      fieldLogic: "any"
+    });
+    const allFieldsAnyKeyword = sanitizeRuleInput({
+      name: "Quick field AND",
+      action: "allow",
+      keyword: "Netflix",
+      fields: ["subject", "code"],
+      keywordLogic: "any",
+      fieldLogic: "all"
+    });
+
+    expect(anyFieldAllKeywords).not.toBeNull();
+    expect(allFieldsAnyKeyword).not.toBeNull();
+    expect(matchesRule(email, { ...baseRule, expression_json: JSON.stringify(anyFieldAllKeywords?.expression) })).toBe(true);
+    expect(matchesRule(email, { ...baseRule, expression_json: JSON.stringify(allFieldsAnyKeyword?.expression) })).toBe(false);
   });
 
   it("supports regex expression and rejects invalid regex input", () => {

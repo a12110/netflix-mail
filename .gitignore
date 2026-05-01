@@ -6,6 +6,7 @@ dist/
 coverage/
 *.log
 .codex-tasks/
+.playwright-mcp/
 UI/
 .DS_Store
 .vscode/

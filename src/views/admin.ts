@@ -133,7 +133,7 @@ function mailSection(): string {
 function rulesSection(): string {
   return String.raw`<section id="rule-center" class="rule-page-shell">
   <div class="rule-page-toolbar rule-page-header">
-    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">按白名单 / 黑名单维护访客可见邮件，支持可视化条件组与拖拽排序。</p></div>
+    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">按命中后动作维护访客可见邮件，支持允许显示与隐藏排除。</p></div>
     <button id="open-rule-form" type="button">添加规则</button>
   </div>
   ${ruleForm()}
@@ -172,14 +172,14 @@ function ruleForm(): string {
     <div class="modal-title-row rule-dialog-title-row"><div><h2 id="rule-form-title">添加规则</h2></div><button type="button" class="secondary rule-dialog-close" data-close-dialog="rule-dialog" aria-label="关闭">×</button></div>
     <div class="rule-form-meta-grid">
       <label class="rule-form-field"><span>规则名称</span><input name="name" placeholder="例如：Netflix 登录验证码" required></label>
-      <label class="rule-form-field"><span>规则类型</span><select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select></label>
+      <label class="rule-form-field"><span>命中后动作</span><select name="action"><option value="allow">允许显示：命中后可在访客链接中显示</option><option value="block">隐藏 / 排除：命中后从访客链接中隐藏</option></select></label>
     </div>
     <div class="rule-canvas" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
       <div class="rule-builder-topline">
-        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
+        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR 关系，拖拽排序或移动到其他分组。</p></div>
         <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
       </div>
-      <div class="rule-builder-actions rule-builder-toolbar"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
+      <div class="rule-builder-actions rule-builder-toolbar rule-builder-fallback-toolbar"><button type="button" class="secondary" id="rule-builder-add-condition">＋ 添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">＋ 添加规则组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
       <div id="rule-builder-root" class="rule-builder-tree rule-workspace" aria-label="规则条件树"></div>
     </div>
     <div class="rule-dialog-panels">
@@ -223,6 +223,10 @@ function shareForm(): string {
   <label>链接名称</label><input name="name" placeholder="例如：临时访客">
   <label>过期时间</label><input name="expiresAt" type="datetime-local">
   <label>绑定规则</label><select id="share-rules" name="ruleIds" multiple size="7" required></select>
+  <div class="rule-grid">
+    <div><label>允许规则关系</label><select name="allowRuleLogic"><option value="or">任一允许规则命中即可显示</option><option value="and">全部允许规则都命中才显示</option></select></div>
+    <div><label>排除规则关系</label><select name="blockRuleLogic"><option value="or">任一排除规则命中即隐藏</option><option value="and">全部排除规则都命中才隐藏</option></select></div>
+  </div>
   <label>状态</label><select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
   <div class="form-actions"><button id="link-submit" type="submit">生成链接</button><span id="link-message" class="muted"></span></div>
 </form>

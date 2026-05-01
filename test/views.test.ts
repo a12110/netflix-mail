@@ -47,6 +47,10 @@ describe("view templates", () => {
     expect(rulesHtml).toContain('id="rule-builder-add-condition"');
     expect(rulesHtml).toContain('id="rule-builder-add-group"');
     expect(rulesHtml).toContain('id="rule-builder-reset"');
+    expect(rulesHtml).toContain("＋ 添加规则组");
+    expect(rulesHtml).toContain("满足任一条件");
+    expect(rulesHtml).toContain("rule-add-drop-zone");
+    expect(rulesHtml).toContain("rule-field-icon");
     expect(rulesHtml).toContain('id="rule-builder-quick-apply"');
     expect(rulesHtml).toContain('id="rule-builder-import"');
     expect(rulesHtml).toContain('name="keywordLogic"');
@@ -77,10 +81,14 @@ describe("view templates", () => {
     expect(shareHtml).toContain('id="link-form"');
     expect(shareHtml).toContain('id="links-table"');
     expect(shareHtml).toContain('id="share-rules"');
+    expect(shareHtml).toContain('name="allowRuleLogic"');
+    expect(shareHtml).toContain('name="blockRuleLogic"');
+    expect(shareHtml).toContain("任一允许规则命中即可显示");
+    expect(shareHtml).toContain("全部排除规则都命中才隐藏");
     expect(shareHtml).toContain("data-reset-link");
     expect(shareHtml).toContain("showUiMessage");
-    expect(shareHtml).toContain("允许规则（至少选择一个）");
-    expect(shareHtml).toContain("屏蔽规则（命中后隐藏）");
+    expect(shareHtml).toContain("允许显示动作（至少选择一个）");
+    expect(shareHtml).toContain("隐藏 / 排除动作（命中后隐藏）");
     expect(shareHtml).not.toContain('id="rule-form"');
     expect(shareHtml).not.toContain('id="search-form"');
 

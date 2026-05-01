@@ -70,6 +70,8 @@ export interface RuleRow {
   updated_at: string;
 }
 
+export type ShareLinkRuleLogic = "and" | "or";
+
 export interface ShareLinkRow {
   id: number;
   name: string | null;
@@ -78,6 +80,8 @@ export interface ShareLinkRow {
   expires_at: string | null;
   status: "active" | "disabled";
   window_minutes: number;
+  allow_rule_logic?: ShareLinkRuleLogic;
+  block_rule_logic?: ShareLinkRuleLogic;
   created_by_admin_id: number;
   created_at: string;
   last_accessed_at: string | null;
