@@ -499,10 +499,14 @@ pre {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 .rule-node.is-dragging-source {
-  opacity: 0.32;
-  border-color: rgba(11, 116, 222, 0.5);
+  opacity: 1;
+  border-color: rgba(37, 99, 235, 0.64);
   border-style: dashed;
-  box-shadow: 0 18px 36px rgba(11, 116, 222, 0.18);
+  background: rgba(219, 234, 254, 0.48);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+.rule-builder-tree.is-pointer-dragging .rule-node.is-dragging-source > * {
+  visibility: hidden;
 }
 .rule-node-group.root {
   border-color: rgba(59, 130, 246, 0.62);
@@ -790,19 +794,19 @@ pre {
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone {
   position: relative;
   display: grid;
-  min-height: 22px;
-  margin: -2px 0;
+  min-height: 10px;
+  margin: -5px 0;
   border: 0;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #2563eb, #3b82f6);
+  border-radius: 14px;
+  background: transparent;
   color: #2563eb;
   font-size: 0;
   font-weight: 800;
   place-items: center;
-  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
+  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
 }
-.rule-builder-tree.is-pointer-dragging .rule-drop-zone::before,
-.rule-builder-tree.is-pointer-dragging .rule-drop-zone::after {
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::before,
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::after {
   content: "";
   position: absolute;
   width: 12px;
@@ -850,8 +854,10 @@ pre {
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.16);
 }
 .rule-drop-zone.active {
-  background: linear-gradient(90deg, #1d4ed8, #2563eb);
-  min-height: 26px;
+  min-height: var(--rule-placeholder-height, 64px) !important;
+  border: 1.5px dashed #2563eb !important;
+  background: rgba(219, 234, 254, 0.66) !important;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.12), 0 12px 28px rgba(37, 99, 235, 0.1) !important;
 }
 .rule-drag-ghost {
   position: fixed;
@@ -864,6 +870,26 @@ pre {
   border-radius: 14px;
   background: rgba(255,255,255,0.98);
   box-shadow: 0 24px 54px rgba(15, 23, 42, 0.2);
+  opacity: 0.96;
+  pointer-events: none;
+  transform-origin: top left;
+  will-change: transform;
+}
+.rule-drag-ghost-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: 0 26px 60px rgba(15, 23, 42, 0.22);
+}
+.rule-drag-ghost-card .rule-node {
+  margin: 0;
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 22px 54px rgba(15, 23, 42, 0.2);
+}
+.rule-drag-ghost-card button,
+.rule-drag-ghost-card input,
+.rule-drag-ghost-card select,
+.rule-drag-ghost-card textarea {
   pointer-events: none;
 }
 .rule-drag-ghost .rule-drag-ghost-title {

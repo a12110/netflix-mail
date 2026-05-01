@@ -23,6 +23,10 @@ const state = {
   ruleBuilderDragOffset: null,
   ruleBuilderLastLiveDropKey: null,
   ruleBuilderLiveRendering: false,
+  ruleBuilderLayoutRects: null,
+  ruleBuilderPlaceholderSize: null,
+  ruleBuilderPendingPointer: null,
+  ruleBuilderMoveFrame: 0,
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
@@ -661,28 +665,43 @@ function handleRuleBuilderPointerDown(event) {
   event.preventDefault();
   state.ruleBuilderDragging = handle.dataset.builderDragId;
   state.ruleBuilderPointerId = event.pointerId;
-  state.ruleBuilderDragOffset = { x: event.clientX, y: event.clientY };
   state.ruleBuilderLastLiveDropKey = null;
   ruleBuilderPointerHandle = handle;
   try { handle.setPointerCapture(event.pointerId); } catch (error) {}
   const root = optional("#rule-builder-root");
   root?.classList.add("is-pointer-dragging");
   const sourceNode = handle.closest("[data-builder-node-id]");
+  state.ruleBuilderDragOffset = getRuleBuilderDragOffset(sourceNode, event.clientX, event.clientY);
+  state.ruleBuilderPlaceholderSize = getRuleBuilderPlaceholderSize(sourceNode);
   sourceNode?.classList.add("is-dragging-source");
-  createRuleBuilderGhost(state.ruleBuilderDragging, event.clientX, event.clientY);
+  createRuleBuilderGhost(state.ruleBuilderDragging, event.clientX, event.clientY, sourceNode);
   syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
   optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
 }
 function handleRuleBuilderPointerMove(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
   event.preventDefault();
-  updateRuleBuilderGhostPosition(event.clientX, event.clientY);
-  const zone = resolveRuleBuilderDropZone(event.clientX, event.clientY);
-  const moved = liveMoveRuleBuilderNode(zone, event.clientX, event.clientY);
+  state.ruleBuilderPendingPointer = { x: event.clientX, y: event.clientY };
+  if (state.ruleBuilderMoveFrame) return;
+  state.ruleBuilderMoveFrame = requestAnimationFrame(processRuleBuilderPointerMove);
+}
+function processRuleBuilderPointerMove() {
+  state.ruleBuilderMoveFrame = 0;
+  const point = state.ruleBuilderPendingPointer;
+  if (!point || !state.ruleBuilderDragging) return;
+  updateRuleBuilderGhostPosition(point.x, point.y);
+  const zone = resolveRuleBuilderDropZone(point.x, point.y);
+  const moved = liveMoveRuleBuilderNode(zone, point.x, point.y);
   if (!moved) syncRuleBuilderActiveZone(zone);
+}
+function flushRuleBuilderPointerMove() {
+  if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
+  state.ruleBuilderMoveFrame = 0;
+  processRuleBuilderPointerMove();
 }
 function handleRuleBuilderPointerUp(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  flushRuleBuilderPointerMove();
   const hadLiveMove = Boolean(state.ruleBuilderLastLiveDropKey);
   const zone = state.ruleBuilderActiveDropZone;
   const moved = !hadLiveMove && zone
@@ -706,6 +725,7 @@ function liveMoveRuleBuilderNode(zone, x, y) {
   const targetIndex = Number(zone.dataset.builderDropIndex);
   const key = parentId + ":" + targetIndex;
   if (state.ruleBuilderLastLiveDropKey === key) return false;
+  state.ruleBuilderLayoutRects = captureRuleBuilderLayoutRects();
   state.ruleBuilderLiveRendering = true;
   let moved = false;
   try {
@@ -713,9 +733,13 @@ function liveMoveRuleBuilderNode(zone, x, y) {
   } finally {
     state.ruleBuilderLiveRendering = false;
   }
-  if (!moved) return false;
+  if (!moved) {
+    state.ruleBuilderLayoutRects = null;
+    return false;
+  }
   state.ruleBuilderLastLiveDropKey = key;
   restoreRuleBuilderLiveDragState(x, y);
+  animateRuleBuilderLayout();
   optional("#rule-message").textContent = "拖动中：排序已实时更新，松开完成";
   return true;
 }
@@ -724,6 +748,34 @@ function restoreRuleBuilderLiveDragState(x, y) {
   document.querySelector('[data-builder-node-id="' + cssEscapeAttribute(state.ruleBuilderDragging) + '"]')?.classList.add("is-dragging-source");
   updateRuleBuilderGhostPosition(x, y);
   syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(x, y));
+}
+function captureRuleBuilderLayoutRects() {
+  const rects = new Map();
+  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => {
+    rects.set(node.dataset.builderNodeId, node.getBoundingClientRect());
+  });
+  return rects;
+}
+function animateRuleBuilderLayout() {
+  const rects = state.ruleBuilderLayoutRects;
+  state.ruleBuilderLayoutRects = null;
+  if (!rects) return;
+  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => animateRuleBuilderNodeShift(node, rects));
+}
+function animateRuleBuilderNodeShift(node, rects) {
+  const before = rects.get(node.dataset.builderNodeId);
+  if (!before || node.classList.contains("is-dragging-source")) return;
+  const after = node.getBoundingClientRect();
+  const deltaX = before.left - after.left;
+  const deltaY = before.top - after.top;
+  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+  node.style.transition = "none";
+  node.style.transform = "translate(" + deltaX + "px," + deltaY + "px)";
+  node.getBoundingClientRect();
+  requestAnimationFrame(() => {
+    node.style.transition = "transform 180ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease";
+    node.style.transform = "";
+  });
 }
 function cssEscapeAttribute(value) {
   return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -738,24 +790,53 @@ function resolveRuleBuilderDropZone(x, y) {
 }
 function syncRuleBuilderActiveZone(zone) {
   if (state.ruleBuilderActiveDropZone === zone) return;
-  if (state.ruleBuilderActiveDropZone) state.ruleBuilderActiveDropZone.classList.remove("active");
+  if (state.ruleBuilderActiveDropZone) {
+    state.ruleBuilderActiveDropZone.classList.remove("active");
+    state.ruleBuilderActiveDropZone.style.removeProperty("--rule-placeholder-height");
+  }
   state.ruleBuilderActiveDropZone = zone || null;
-  if (state.ruleBuilderActiveDropZone) state.ruleBuilderActiveDropZone.classList.add("active");
+  if (state.ruleBuilderActiveDropZone) {
+    state.ruleBuilderActiveDropZone.classList.add("active");
+    const size = state.ruleBuilderPlaceholderSize;
+    if (size?.height) state.ruleBuilderActiveDropZone.style.setProperty("--rule-placeholder-height", size.height + "px");
+  }
 }
-function createRuleBuilderGhost(sourceId, x, y) {
+function createRuleBuilderGhost(sourceId, x, y, sourceElement) {
   const node = findRuleBuilderNode(state.ruleBuilder, sourceId);
   if (!node) return;
   if (!ruleBuilderGhostEl) {
     ruleBuilderGhostEl = document.createElement("div");
-    ruleBuilderGhostEl.className = "rule-drag-ghost";
     document.body.appendChild(ruleBuilderGhostEl);
   }
-  ruleBuilderGhostEl.innerHTML = '<div class="rule-drag-ghost-title">' + renderRuleNodeKind(node) + '<span>' + escapeText(ruleBuilderGhostTitle(node)) + '</span></div><div class="rule-drag-ghost-body">' + escapeText(ruleBuilderGhostBody(node)) + '</div>';
+  ruleBuilderGhostEl.className = "rule-drag-ghost" + (sourceElement ? " rule-drag-ghost-card" : "");
+  if (sourceElement) renderRuleBuilderGhostCard(sourceElement);
+  else ruleBuilderGhostEl.innerHTML = '<div class="rule-drag-ghost-title">' + renderRuleNodeKind(node) + '<span>' + escapeText(ruleBuilderGhostTitle(node)) + '</span></div><div class="rule-drag-ghost-body">' + escapeText(ruleBuilderGhostBody(node)) + '</div>';
   updateRuleBuilderGhostPosition(x, y);
+}
+function renderRuleBuilderGhostCard(sourceElement) {
+  const rect = sourceElement.getBoundingClientRect();
+  const clone = sourceElement.cloneNode(true);
+  clone.classList.remove("is-dragging-source");
+  clone.querySelectorAll("[id]").forEach((item) => item.removeAttribute("id"));
+  clone.querySelectorAll("button, input, select, textarea").forEach((item) => item.setAttribute("tabindex", "-1"));
+  ruleBuilderGhostEl.style.width = Math.min(rect.width, window.innerWidth - 32) + "px";
+  ruleBuilderGhostEl.innerHTML = "";
+  ruleBuilderGhostEl.appendChild(clone);
+}
+function getRuleBuilderDragOffset(sourceElement, x, y) {
+  if (!sourceElement) return { x: -18, y: -18 };
+  const rect = sourceElement.getBoundingClientRect();
+  return { x: x - rect.left, y: y - rect.top };
+}
+function getRuleBuilderPlaceholderSize(sourceElement) {
+  if (!sourceElement) return null;
+  const rect = sourceElement.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
 }
 function updateRuleBuilderGhostPosition(x, y) {
   if (!ruleBuilderGhostEl) return;
-  ruleBuilderGhostEl.style.transform = 'translate(' + (x + 18) + 'px,' + (y + 18) + 'px)';
+  const offset = state.ruleBuilderDragOffset || { x: -18, y: -18 };
+  ruleBuilderGhostEl.style.transform = 'translate(' + (x - offset.x) + 'px,' + (y - offset.y) + 'px)';
 }
 function ruleBuilderGhostTitle(node) {
   if (node.op === "condition") return "条件节点";
@@ -774,6 +855,11 @@ function clearRuleBuilderDropState() {
   state.ruleBuilderDragOffset = null;
   state.ruleBuilderLastLiveDropKey = null;
   state.ruleBuilderLiveRendering = false;
+  state.ruleBuilderLayoutRects = null;
+  state.ruleBuilderPlaceholderSize = null;
+  state.ruleBuilderPendingPointer = null;
+  if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
+  state.ruleBuilderMoveFrame = 0;
   syncRuleBuilderActiveZone(null);
   document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source"));
   optional("#rule-builder-root")?.classList.remove("is-pointer-dragging");
