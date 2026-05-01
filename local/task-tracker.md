@@ -117,7 +117,7 @@
 - [x] 子任务 4：升级为 Pointer Events 拖拽（ghost preview + drop zone）
 - [x] 子任务 5：更新测试与 README 文档
 - [x] 子任务 6：运行自动化验证
-- [x] 子任务 7：代码评审完成，待执行 git add/commit
+- [x] 子任务 7：代码评审、git add/commit 完成交付
 
 ### 关键决策
 - 保留现有规则表达式结构、后端 API 与数据库 schema，不改数据层。
