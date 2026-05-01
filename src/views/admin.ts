@@ -131,13 +131,18 @@ function mailSection(): string {
 }
 
 function rulesSection(): string {
-  return String.raw`<section id="rule-center">
-  <div class="card-header">
-    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">独立维护访客可见邮件的匹配规则。</p></div>
+  return String.raw`<section id="rule-center" class="rule-page-shell">
+  <div class="rule-page-toolbar">
+    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">按白名单 / 黑名单维护访客可见邮件，支持可视化条件组与拖拽排序。</p></div>
     <button id="open-rule-form" type="button">添加规则</button>
   </div>
+  <div class="rule-page-intro">
+    <div class="rule-intro-card"><strong>白名单优先展示</strong><span>至少命中一个允许规则才会对访客可见。</span></div>
+    <div class="rule-intro-card"><strong>黑名单即时屏蔽</strong><span>垃圾邮件、营销信或误命中邮件可直接排除。</span></div>
+    <div class="rule-intro-card"><strong>拖拽搭建表达式</strong><span>支持 AND / OR / NOT 嵌套，保留复制、上移和删除兜底。</span></div>
+  </div>
   ${ruleForm()}
-  <div id="rules-table"></div>
+  <div id="rules-table" class="rule-list-shell"></div>
 </section>`;
 }
 
@@ -166,42 +171,51 @@ function databaseSection(): string {
 
 function ruleForm(): string {
   return String.raw`<dialog id="rule-dialog" class="modal-card" aria-labelledby="rule-form-title">
-<form id="rule-form" class="modal-form">
+<form id="rule-form" class="modal-form rule-dialog-form">
   <input type="hidden" name="id">
-  <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
-  <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
-  <label>规则类型</label>
-  <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
-  <div class="rule-builder-panel" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
-    <div class="rule-builder-topline">
-      <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
-      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
+  <div class="rule-dialog-shell">
+    <div class="modal-title-row rule-dialog-title-row"><div><p class="page-kicker">Rule Builder</p><h2 id="rule-form-title">添加规则</h2></div><button type="button" class="secondary" data-close-dialog="rule-dialog">取消</button></div>
+    <div class="rule-form-meta-grid">
+      <label class="rule-form-field"><span>规则名称</span><input name="name" placeholder="例如：Netflix 登录验证码" required></label>
+      <label class="rule-form-field"><span>规则类型</span><select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select></label>
     </div>
-    <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
-    <div id="rule-builder-root" class="rule-builder-tree" aria-label="规则条件树"></div>
+    <div class="rule-canvas" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
+      <div class="rule-builder-topline">
+        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，支持 Pointer Events 拖拽排序或移动到其他分组。</p></div>
+        <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
+      </div>
+      <div class="rule-builder-actions rule-builder-toolbar"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
+      <div id="rule-builder-root" class="rule-builder-tree rule-workspace" aria-label="规则条件树"></div>
+    </div>
+    <div class="rule-dialog-panels">
+      <details class="rule-quick" open><summary>批量生成条件</summary>
+        <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
+        <div class="rule-grid">
+          <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
+          <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
+        </div>
+        <label>匹配字段</label>
+        <div class="chips">
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
+        </div>
+        <div class="rule-grid">
+          <div><label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select></div>
+          <label class="checkbox-pill rule-enabled-chip"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+        </div>
+        <button type="button" class="secondary" id="rule-builder-quick-apply">应用到可视化编辑器</button>
+      </details>
+      <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
+    </div>
+    <div class="rule-dialog-footer">
+      <label class="checkbox-pill rule-enabled-chip"><input type="checkbox" name="enabled" checked> 启用规则</label>
+      <div class="rule-dialog-submit"><span id="rule-message" class="muted" role="status" aria-live="polite"></span><button type="button" class="secondary" data-close-dialog="rule-dialog">取消</button><button id="rule-submit" type="submit">保存规则</button></div>
+    </div>
   </div>
-  <details class="rule-quick"><summary>批量生成条件</summary>
-    <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
-    <div class="rule-grid">
-      <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
-      <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
-    </div>
-    <label>匹配字段</label>
-    <div class="chips">
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
-    </div>
-    <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select>
-    <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
-    <button type="button" class="secondary" id="rule-builder-quick-apply">应用到可视化编辑器</button>
-  </details>
-  <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
-  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
-  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted" role="status" aria-live="polite"></span></div>
 </form>
 </dialog>`;
 }

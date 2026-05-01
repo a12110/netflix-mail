@@ -18,6 +18,9 @@ const state = {
   ruleBuilder: null,
   ruleBuilderBound: false,
   ruleBuilderDragging: null,
+  ruleBuilderPointerId: null,
+  ruleBuilderActiveDropZone: null,
+  ruleBuilderDragOffset: null,
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
@@ -34,6 +37,8 @@ const loginMessage = document.querySelector("#login-message");
 const adminName = document.querySelector("#admin-name");
 const logoutButton = document.querySelector("#logout");
 let mailRefreshController = null;
+let ruleBuilderGhostEl = null;
+let ruleBuilderPointerHandle = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
@@ -483,17 +488,20 @@ function renderRuleBuilder() {
 }
 function renderRuleBuilderNode(node, parentId, depth, index) {
   const isGroup = node.op === "and" || node.op === "or";
-  const isNot = node.op === "not";
-  const typeLabel = isGroup ? (node.op === "and" ? "全部满足" : "任一满足") : isNot ? "NOT" : "条件";
-  const classes = "rule-node rule-node-" + node.op + (depth === 0 ? " root" : "");
   const canMove = Boolean(parentId);
+  const classes = "rule-node rule-node-" + node.op + (depth === 0 ? " root" : "");
   return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
     '<div class="rule-node-header">' +
-      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动节点</button>' +
-      '<span class="badge muted-badge">' + escapeText(typeLabel) + '</span>' +
+      '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '><span class="rule-grip" aria-hidden="true"></span></button>' +
+      renderRuleNodeKind(node) +
       renderRuleNodeControls(node) +
       '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
     '</div>' + renderRuleNodeBody(node, depth) + '</div>';
+}
+function renderRuleNodeKind(node) {
+  const kind = node.op === "and" ? "AND" : node.op === "or" ? "OR" : node.op === "not" ? "NOT" : "条件";
+  const className = node.op === "or" ? " rule-node-kind-or" : node.op === "not" ? " rule-node-kind-not" : node.op === "condition" ? " rule-node-kind-condition" : "";
+  return '<span class="rule-node-kind' + className + '">' + escapeText(kind) + '</span>';
 }
 function renderRuleNodeControls(node) {
   if (node.op === "and" || node.op === "or") {
@@ -542,11 +550,11 @@ function bindRuleBuilderEvents() {
   root.addEventListener("input", handleRuleBuilderInput);
   root.addEventListener("change", handleRuleBuilderInput);
   root.addEventListener("click", handleRuleBuilderClick);
-  root.addEventListener("dragstart", handleRuleBuilderDragStart);
-  root.addEventListener("dragover", handleRuleBuilderDragOver);
-  root.addEventListener("dragleave", handleRuleBuilderDragLeave);
-  root.addEventListener("drop", handleRuleBuilderDrop);
-  root.addEventListener("dragend", clearRuleBuilderDropState);
+  root.addEventListener("pointerdown", handleRuleBuilderPointerDown);
+  root.addEventListener("lostpointercapture", handleRuleBuilderLostPointerCapture, true);
+  document.addEventListener("pointermove", handleRuleBuilderPointerMove);
+  document.addEventListener("pointerup", handleRuleBuilderPointerUp);
+  document.addEventListener("pointercancel", handleRuleBuilderPointerCancel);
 }
 function handleRuleBuilderInput(event) {
   const target = event.target;
@@ -571,41 +579,100 @@ function handleRuleBuilderClick(event) {
   if (target.dataset.builderDuplicate) duplicateRuleBuilderNode(target.dataset.builderDuplicate);
   if (target.dataset.builderMove) moveRuleBuilderSibling(target.dataset.builderMoveId, target.dataset.builderMove);
 }
-function handleRuleBuilderDragStart(event) {
+function handleRuleBuilderPointerDown(event) {
   const handle = event.target.closest("[data-builder-drag-id]");
-  if (!handle || handle.disabled || !event.dataTransfer) return;
+  if (!handle || handle.disabled || event.button !== 0 || state.ruleBuilderDragging) return;
+  event.preventDefault();
   state.ruleBuilderDragging = handle.dataset.builderDragId;
-  event.dataTransfer.setData("text/plain", state.ruleBuilderDragging);
-  event.dataTransfer.effectAllowed = "move";
-  optional("#rule-builder-root")?.classList.add("is-dragging");
-  handle.closest("[data-builder-node-id]")?.classList.add("is-dragging");
+  state.ruleBuilderPointerId = event.pointerId;
+  state.ruleBuilderDragOffset = { x: event.clientX, y: event.clientY };
+  ruleBuilderPointerHandle = handle;
+  try { handle.setPointerCapture(event.pointerId); } catch (error) {}
+  const root = optional("#rule-builder-root");
+  root?.classList.add("is-pointer-dragging");
+  const sourceNode = handle.closest("[data-builder-node-id]");
+  sourceNode?.classList.add("is-dragging-source");
+  createRuleBuilderGhost(state.ruleBuilderDragging, event.clientX, event.clientY);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
   optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
 }
-function handleRuleBuilderDragOver(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (!zone || !state.ruleBuilderDragging) return;
+function handleRuleBuilderPointerMove(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
   event.preventDefault();
-  zone.classList.add("active");
-  event.dataTransfer.dropEffect = "move";
+  updateRuleBuilderGhostPosition(event.clientX, event.clientY);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
 }
-function handleRuleBuilderDragLeave(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (zone) zone.classList.remove("active");
-}
-function handleRuleBuilderDrop(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (!zone) return;
-  event.preventDefault();
-  const sourceId = state.ruleBuilderDragging || event.dataTransfer.getData("text/plain");
-  const moved = moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
-  optional("#rule-message").textContent = moved ? "已移动节点" : "无法移动到该位置";
+function handleRuleBuilderPointerUp(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  const zone = state.ruleBuilderActiveDropZone;
+  const moved = zone ? moveRuleBuilderNode(state.ruleBuilderDragging, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex)) : false;
+  optional("#rule-message").textContent = moved ? "已移动节点" : zone ? "无法移动到该位置" : "已取消拖拽";
   clearRuleBuilderDropState();
 }
+function handleRuleBuilderPointerCancel(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  clearRuleBuilderDropState();
+}
+function handleRuleBuilderLostPointerCapture(event) {
+  if (!state.ruleBuilderDragging) return;
+  if (event.target !== ruleBuilderPointerHandle) return;
+  clearRuleBuilderDropState();
+}
+function resolveRuleBuilderDropZone(x, y) {
+  const hits = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+  for (const hit of hits) {
+    const zone = hit?.closest?.("[data-builder-drop-parent]");
+    if (zone) return zone;
+  }
+  return null;
+}
+function syncRuleBuilderActiveZone(zone) {
+  if (state.ruleBuilderActiveDropZone === zone) return;
+  if (state.ruleBuilderActiveDropZone) state.ruleBuilderActiveDropZone.classList.remove("active");
+  state.ruleBuilderActiveDropZone = zone || null;
+  if (state.ruleBuilderActiveDropZone) state.ruleBuilderActiveDropZone.classList.add("active");
+}
+function createRuleBuilderGhost(sourceId, x, y) {
+  const node = findRuleBuilderNode(state.ruleBuilder, sourceId);
+  if (!node) return;
+  if (!ruleBuilderGhostEl) {
+    ruleBuilderGhostEl = document.createElement("div");
+    ruleBuilderGhostEl.className = "rule-drag-ghost";
+    document.body.appendChild(ruleBuilderGhostEl);
+  }
+  ruleBuilderGhostEl.innerHTML = '<div class="rule-drag-ghost-title">' + renderRuleNodeKind(node) + '<span>' + escapeText(ruleBuilderGhostTitle(node)) + '</span></div><div class="rule-drag-ghost-body">' + escapeText(ruleBuilderGhostBody(node)) + '</div>';
+  updateRuleBuilderGhostPosition(x, y);
+}
+function updateRuleBuilderGhostPosition(x, y) {
+  if (!ruleBuilderGhostEl) return;
+  ruleBuilderGhostEl.style.transform = 'translate(' + (x + 18) + 'px,' + (y + 18) + 'px)';
+}
+function ruleBuilderGhostTitle(node) {
+  if (node.op === "condition") return "条件节点";
+  if (node.op === "not") return "NOT 分组";
+  return node.op.toUpperCase() + " 分组";
+}
+function ruleBuilderGhostBody(node) {
+  if (node.op === "condition") return (RULE_FIELD_LABELS[node.field] || node.field) + ' ' + (RULE_OPERATOR_LABELS[node.operator] || node.operator) + ' ' + String(node.value || '');
+  if (node.op === "not") return '反向匹配：' + summarizeRuleExpression(stripRuleBuilderMetadata(node.child));
+  return '包含 ' + String((node.children || []).length) + ' 个子节点';
+}
 function clearRuleBuilderDropState() {
+  const pointerId = state.ruleBuilderPointerId;
   state.ruleBuilderDragging = null;
-  document.querySelectorAll(".rule-drop-zone.active").forEach((zone) => zone.classList.remove("active"));
-  document.querySelectorAll(".rule-node.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
-  optional("#rule-builder-root")?.classList.remove("is-dragging");
+  state.ruleBuilderPointerId = null;
+  state.ruleBuilderDragOffset = null;
+  syncRuleBuilderActiveZone(null);
+  document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source"));
+  optional("#rule-builder-root")?.classList.remove("is-pointer-dragging");
+  if (ruleBuilderGhostEl) {
+    ruleBuilderGhostEl.remove();
+    ruleBuilderGhostEl = null;
+  }
+  if (ruleBuilderPointerHandle && pointerId !== null) {
+    try { ruleBuilderPointerHandle.releasePointerCapture(pointerId); } catch (error) {}
+  }
+  ruleBuilderPointerHandle = null;
 }
 function addRuleBuilderChild(kind, parentId) {
   ensureRuleBuilderGroupRoot();

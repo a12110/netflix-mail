@@ -107,3 +107,27 @@
 
 ### 阻塞项
 - 暂无。
+
+## 2026-05-01 规则页 UI 重写与 Pointer Events 拖拽升级
+
+### 子任务清单
+- [x] 子任务 1：建立任务追踪、SPEC、TODO、PROGRESS 基线
+- [x] 子任务 2：重写规则管理页列表与弹窗结构
+- [x] 子任务 3：重写规则构建器样式与截图风格交互
+- [x] 子任务 4：升级为 Pointer Events 拖拽（ghost preview + drop zone）
+- [x] 子任务 5：更新测试与 README 文档
+- [x] 子任务 6：运行自动化验证
+- [x] 子任务 7：代码评审完成，待执行 git add/commit
+
+### 关键决策
+- 保留现有规则表达式结构、后端 API 与数据库 schema，不改数据层。
+- 不引入第三方 DnD 依赖，沿用原生 DOM + Pointer Events。
+- 复用 `moveRuleBuilderNode()` 作为节点移动真逻辑，仅替换拖拽输入层。
+- 保留复制、上移、下移、删除作为非拖拽与键盘友好兜底。
+
+### 验证记录
+- `./node_modules/.bin/tsc --noEmit && ./node_modules/.bin/vitest run` 通过：12 个测试文件 / 35 个测试。
+- `yarn check` 因沙箱网络解析 `registry.yarnpkg.com` 失败，已改用本地 `tsc + vitest` 完成等价验证。
+
+### 阻塞项
+- 暂无。
