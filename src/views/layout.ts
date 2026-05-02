@@ -702,8 +702,19 @@ pre {
   border-color: transparent;
   background: transparent;
 }
+.rule-drag-handle:hover,
+.rule-drag-handle:focus-visible {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+}
 .rule-drag-handle:disabled { cursor: not-allowed; }
-.rule-drag-handle:active { cursor: grabbing; }
+.rule-drag-handle:active,
+.rule-builder-tree.is-pointer-dragging .rule-drag-handle { cursor: grabbing; }
+.rule-builder-tree.is-pointer-dragging .rule-node:not(.is-dragging-source) {
+  will-change: transform;
+}
 .rule-grip {
   width: 14px;
   height: 14px;

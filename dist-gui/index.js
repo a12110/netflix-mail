@@ -2399,6 +2399,8 @@ CREATE TABLE IF NOT EXISTS share_links (
   expires_at TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'disabled')),
   window_minutes INTEGER NOT NULL DEFAULT 30,
+  allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or')),
+  block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or')),
   created_by_admin_id INTEGER NOT NULL,
   created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
   last_accessed_at TEXT,
@@ -2429,7 +2431,6 @@ CREATE INDEX IF NOT EXISTS idx_emails_envelope_to ON emails(envelope_to);
 CREATE INDEX IF NOT EXISTS idx_email_codes_email ON email_codes(email_id);
 CREATE INDEX IF NOT EXISTS idx_email_codes_code ON email_codes(code);
 CREATE INDEX IF NOT EXISTS idx_rules_enabled ON rules(enabled);
-CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
 CREATE INDEX IF NOT EXISTS idx_share_links_status ON share_links(status);
 CREATE INDEX IF NOT EXISTS idx_access_logs_created_at ON access_logs(created_at DESC);
 `;
@@ -2443,10 +2444,15 @@ ALTER TABLE rules ADD COLUMN expression_json TEXT;
 ALTER TABLE rules ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 2;
 CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled);
 `;
+var SHARE_LINK_RULE_LOGIC_SQL = String.raw`
+ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or'));
+ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'));
+`;
 var DATABASE_MIGRATIONS = [
   { id: "0001_initial", version: "v0.0.1", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
   { id: "0002_share_link_token", version: "v0.0.2", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL },
-  { id: "0003_rule_expressions", version: "v0.0.3", description: "\u652F\u6301\u89C4\u5219\u767D\u9ED1\u540D\u5355\u4E0E\u9AD8\u7EA7\u8868\u8FBE\u5F0F", sql: RULE_EXPRESSIONS_SQL }
+  { id: "0003_rule_expressions", version: "v0.0.3", description: "\u652F\u6301\u89C4\u5219\u767D\u9ED1\u540D\u5355\u4E0E\u9AD8\u7EA7\u8868\u8FBE\u5F0F", sql: RULE_EXPRESSIONS_SQL },
+  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "\u652F\u6301\u5206\u4EAB\u94FE\u63A5\u5141\u8BB8/\u6392\u9664\u89C4\u5219\u7EC4\u5408\u903B\u8F91", sql: SHARE_LINK_RULE_LOGIC_SQL }
 ];
 var UNINITIALIZED_DATABASE_VERSION = "\u672A\u521D\u59CB\u5316";
 async function ensureDatabaseSchema(db) {
@@ -2485,6 +2491,9 @@ async function buildDatabaseResult(db, migrations, appliedMigrations) {
 }
 __name(buildDatabaseResult, "buildDatabaseResult");
 async function currentVersionFromSchema(db, migrations) {
+  if (await columnExists(db, "share_links", "allow_rule_logic") && await columnExists(db, "share_links", "block_rule_logic")) {
+    return migrationVersion("0004_share_link_rule_logic");
+  }
   if (await columnExists(db, "rules", "expression_json")) {
     return migrationVersion("0003_rule_expressions");
   }
@@ -2518,6 +2527,10 @@ async function applyMigration(db, migration) {
     await applyRuleExpressionsMigration(db);
     return;
   }
+  if (migration.id === "0004_share_link_rule_logic") {
+    await applyShareLinkRuleLogicMigration(db);
+    return;
+  }
   await runSqlStatements(db, migration.sql);
 }
 __name(applyMigration, "applyMigration");
@@ -2541,6 +2554,15 @@ async function applyRuleExpressionsMigration(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_rules_action_enabled ON rules(action, enabled)").run();
 }
 __name(applyRuleExpressionsMigration, "applyRuleExpressionsMigration");
+async function applyShareLinkRuleLogicMigration(db) {
+  if (!await columnExists(db, "share_links", "allow_rule_logic")) {
+    await db.prepare("ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or'))").run();
+  }
+  if (!await columnExists(db, "share_links", "block_rule_logic")) {
+    await db.prepare("ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'))").run();
+  }
+}
+__name(applyShareLinkRuleLogicMigration, "applyShareLinkRuleLogicMigration");
 async function ensureMigrationTable(db) {
   await db.prepare(MIGRATION_TABLE_SQL).run();
 }
@@ -7089,19 +7111,32 @@ function matchesRule(email, rule) {
   return Boolean(rule.enabled) && evaluateExpression(email, ruleExpression(rule));
 }
 __name(matchesRule, "matchesRule");
-function evaluateRuleSet(email, rules) {
+function evaluateRuleSet(email, rules, options = {}) {
+  const allowRuleLogic = options.allowRuleLogic ?? "or";
+  const blockRuleLogic = options.blockRuleLogic ?? "or";
+  const enabledRules = rules.filter((rule) => Boolean(rule.enabled));
+  const allowRules = enabledRules.filter((rule) => ruleAction(rule) === "allow");
+  const blockRules = enabledRules.filter((rule) => ruleAction(rule) === "block");
   const matchedAllowRuleIds = [];
   const matchedBlockRuleIds = [];
-  for (const rule of rules) {
+  for (const rule of allowRules) {
     if (!matchesRule(email, rule)) continue;
-    if (ruleAction(rule) === "block") matchedBlockRuleIds.push(rule.id);
-    else matchedAllowRuleIds.push(rule.id);
+    matchedAllowRuleIds.push(rule.id);
   }
-  const allowed = matchedAllowRuleIds.length > 0;
-  const blocked = matchedBlockRuleIds.length > 0;
+  for (const rule of blockRules) {
+    if (!matchesRule(email, rule)) continue;
+    matchedBlockRuleIds.push(rule.id);
+  }
+  const allowed = evaluateRuleGroupMatch(allowRules.length, matchedAllowRuleIds.length, allowRuleLogic);
+  const blocked = evaluateRuleGroupMatch(blockRules.length, matchedBlockRuleIds.length, blockRuleLogic);
   return { allowed, blocked, visible: allowed && !blocked, matchedAllowRuleIds, matchedBlockRuleIds };
 }
 __name(evaluateRuleSet, "evaluateRuleSet");
+function normalizeShareLinkRuleLogic(value, fallback = "or") {
+  if (value === "and" || value === "or") return value;
+  return fallback;
+}
+__name(normalizeShareLinkRuleLogic, "normalizeShareLinkRuleLogic");
 function extractExpressionKeywords(expression) {
   if (expression.op === "condition") return [expression.value];
   if (expression.op === "not") return extractExpressionKeywords(expression.child);
@@ -7143,8 +7178,10 @@ function legacyExpressionFromInput(input, caseSensitive) {
   const keywords = input.keywords?.length ? input.keywords : parseRuleKeywords(input.keyword);
   if (fields.length === 0 || keywords.length === 0) return null;
   const operator = input.matchMode === "exact" ? "exact" : "contains";
-  const keywordGroups = keywords.map((keyword) => expressionGroup("or", fields.map((field) => ({ op: "condition", field, operator, value: keyword, caseSensitive })))).filter((group) => Boolean(group));
-  return expressionGroup("or", keywordGroups);
+  const keywordLogic = normalizeRuleLogic(input.keywordLogic, "or");
+  const fieldLogic = normalizeRuleLogic(input.fieldLogic, "or");
+  const keywordGroups = keywords.map((keyword) => expressionGroup(fieldLogic, fields.map((field) => ({ op: "condition", field, operator, value: keyword, caseSensitive })))).filter((group) => Boolean(group));
+  return expressionGroup(keywordLogic, keywordGroups);
 }
 __name(legacyExpressionFromInput, "legacyExpressionFromInput");
 function legacyExpressionFromRule(rule) {
@@ -7217,6 +7254,17 @@ function expressionGroup(op, children) {
   return children.length === 1 ? children[0] : { op, children };
 }
 __name(expressionGroup, "expressionGroup");
+function normalizeRuleLogic(value, fallback) {
+  if (value === "all" || value === "and") return "and";
+  if (value === "any" || value === "or") return "or";
+  return fallback;
+}
+__name(normalizeRuleLogic, "normalizeRuleLogic");
+function evaluateRuleGroupMatch(totalRuleCount, matchedRuleCount, logic) {
+  if (totalRuleCount === 0) return false;
+  return logic === "and" ? matchedRuleCount === totalRuleCount : matchedRuleCount > 0;
+}
+__name(evaluateRuleGroupMatch, "evaluateRuleGroupMatch");
 function parseJson(value) {
   if (!value) return null;
   try {
@@ -7243,9 +7291,21 @@ async function createShareLink(db, input) {
   const token = randomToken();
   const tokenHash = await hashShareToken(token);
   const result = await db.prepare(
-    `INSERT INTO share_links (name, token, token_hash, expires_at, status, window_minutes, created_by_admin_id)
-       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6)`
-  ).bind(input.name ?? null, token, tokenHash, input.expiresAt ?? null, DEFAULT_WINDOW_MINUTES, input.adminId).run();
+    `INSERT INTO share_links (
+         name, token, token_hash, expires_at, status, window_minutes,
+         allow_rule_logic, block_rule_logic, created_by_admin_id
+       )
+       VALUES (?1, ?2, ?3, ?4, 'active', ?5, ?6, ?7, ?8)`
+  ).bind(
+    input.name ?? null,
+    token,
+    tokenHash,
+    input.expiresAt ?? null,
+    DEFAULT_WINDOW_MINUTES,
+    input.allowRuleLogic ?? "or",
+    input.blockRuleLogic ?? "or",
+    input.adminId
+  ).run();
   const id = Number(result.meta.last_row_id);
   await db.batch(
     input.ruleIds.map(
@@ -7266,6 +7326,8 @@ async function updateShareLink(db, id, input) {
   addShareLinkUpdate(updates, values, "name", input.name);
   addShareLinkUpdate(updates, values, "expires_at", input.expiresAt);
   addShareLinkUpdate(updates, values, "status", input.status);
+  addShareLinkUpdate(updates, values, "allow_rule_logic", input.allowRuleLogic);
+  addShareLinkUpdate(updates, values, "block_rule_logic", input.blockRuleLogic);
   if (updates.length > 0) {
     values.push(id);
     await db.prepare(`UPDATE share_links SET ${updates.join(", ")} WHERE id = ?${values.length}`).bind(...values).run();
@@ -7508,6 +7570,9 @@ async function adminListShareLinks(c) {
 __name(adminListShareLinks, "adminListShareLinks");
 async function adminCreateShareLink(c, admin) {
   const body = await readJson(c);
+  if (!isValidOptionalShareRuleLogic(body?.allowRuleLogic) || !isValidOptionalShareRuleLogic(body?.blockRuleLogic)) {
+    return badRequest(c, "allowRuleLogic and blockRuleLogic must be 'and' or 'or'.");
+  }
   const ruleIds = body?.ruleIds?.filter(Number.isInteger) ?? [];
   if (ruleIds.length === 0) {
     return badRequest(c, "At least one rule is required.");
@@ -7524,7 +7589,9 @@ async function adminCreateShareLink(c, admin) {
     name: body?.name?.trim() || null,
     expiresAt: normalizeExpiresAt(body?.expiresAt),
     ruleIds: uniqueRuleIds,
-    adminId: admin.id
+    adminId: admin.id,
+    allowRuleLogic: normalizeShareLinkRuleLogic(body?.allowRuleLogic),
+    blockRuleLogic: normalizeShareLinkRuleLogic(body?.blockRuleLogic)
   });
   const url = new URL(`/v/${created.token}`, c.req.url).toString();
   await writeAccessLog(c.env.DB, {
@@ -7539,7 +7606,10 @@ __name(adminCreateShareLink, "adminCreateShareLink");
 async function adminUpdateShareLink(c) {
   const id = Number(c.req.param("id"));
   const body = await readJson(c) ?? {};
-  if (!Number.isInteger(id) || !isValidShareStatus(body.status)) {
+  if (!Number.isInteger(id) || !isValidShareStatus(body.status) || !isValidOptionalShareRuleLogic(body.allowRuleLogic)) {
+    return badRequest(c, "Invalid share link update.");
+  }
+  if (!isValidOptionalShareRuleLogic(body.blockRuleLogic)) {
     return badRequest(c, "Invalid share link update.");
   }
   const update = await buildShareLinkUpdate(c, body);
@@ -7609,6 +7679,8 @@ function publicShareLink(c, link) {
     created_at: link.created_at,
     last_accessed_at: link.last_accessed_at,
     ruleIds: link.ruleIds,
+    allowRuleLogic: normalizeShareLinkRuleLogic(link.allow_rule_logic),
+    blockRuleLogic: normalizeShareLinkRuleLogic(link.block_rule_logic),
     url: link.token ? new URL(`/v/${link.token}`, c.req.url).toString() : null
   };
 }
@@ -7629,11 +7701,17 @@ function isValidShareStatus(status) {
   return status === void 0 || status === "active" || status === "disabled";
 }
 __name(isValidShareStatus, "isValidShareStatus");
+function isValidOptionalShareRuleLogic(value) {
+  return value === void 0 || value === "and" || value === "or";
+}
+__name(isValidOptionalShareRuleLogic, "isValidOptionalShareRuleLogic");
 async function buildShareLinkUpdate(c, body) {
   const update = {};
   if ("name" in body) update.name = body.name?.trim() || null;
   if ("expiresAt" in body) update.expiresAt = normalizeExpiresAt(body.expiresAt);
   if (body.status) update.status = body.status;
+  if ("allowRuleLogic" in body) update.allowRuleLogic = normalizeShareLinkRuleLogic(body.allowRuleLogic);
+  if ("blockRuleLogic" in body) update.blockRuleLogic = normalizeShareLinkRuleLogic(body.blockRuleLogic);
   if (Array.isArray(body.ruleIds)) {
     const ruleIds = body.ruleIds.filter(Number.isInteger);
     if (ruleIds.length === 0) return null;
@@ -8193,7 +8271,7 @@ pre {
   box-shadow: var(--shadow-md);
   overflow: hidden;
 }
-#rule-dialog { width: min(1040px, calc(100vw - 32px)); }
+#rule-dialog { width: min(1280px, calc(100vw - 16px)); }
 .modal-card::backdrop { background: rgba(15, 23, 42, 0.38); backdrop-filter: blur(4px); }
 .modal-form { max-height: calc(100vh - 32px); overflow-y: auto; padding: 22px; }
 .modal-title-row { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 12px; }
@@ -8300,38 +8378,614 @@ pre {
 .progress-line::before, .progress-line::after { content: ""; width: min(180px, 24vw); height: 6px; border-radius: 999px; background: linear-gradient(90deg, var(--primary), #60a5fa); }
 .notice { display: flex; gap: 12px; align-items: flex-start; padding: 16px; border-radius: var(--radius-md); border: 1px solid #bfdbfe; background: rgba(239, 246, 255, 0.86); color: #1e40af; }
 .rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-
-.rule-builder-panel { margin-top: 16px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: linear-gradient(180deg, #ffffff, #f8fbff); box-shadow: inset 0 1px 0 rgba(255,255,255,0.75); }
-.rule-builder-topline { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
-.rule-builder-summary { margin: 0 0 12px; padding: 9px 11px; border: 1px solid #c7d2fe; border-radius: var(--radius-sm); background: #eef2ff; color: #3730a3; font-size: 12px; font-weight: 800; line-height: 1.45; }
-.rule-builder-summary.invalid { border-color: #fed7aa; background: #fff7ed; color: #c2410c; }
-.rule-builder-actions, .rule-node-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-.rule-builder-actions button, .rule-node-actions button { min-height: 34px; padding: 7px 10px; font-size: 12px; }
-.rule-builder-tree { display: grid; gap: 10px; }
-.rule-node { border: 1px solid var(--line); border-radius: var(--radius-md); background: rgba(255, 255, 255, 0.9); box-shadow: var(--shadow-sm); overflow: hidden; transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease; }
-.rule-node:hover, .rule-node:focus-within { border-color: rgba(99, 102, 241, 0.38); box-shadow: 0 14px 30px rgba(99, 102, 241, 0.12); }
-.rule-node.is-dragging { opacity: 0.58; border-color: var(--primary); box-shadow: 0 18px 36px rgba(11, 116, 222, 0.18); }
-.rule-node.root { border-color: rgba(11, 116, 222, 0.28); }
-.rule-node-not { border-style: dashed; border-color: #c4b5fd; background: #fbfaff; }
-.rule-node-header { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 10px; background: rgba(248, 250, 252, 0.86); border-bottom: 1px solid var(--line); }
-.rule-drag-handle { cursor: grab; min-height: 32px; padding: 6px 9px; }
+.rule-page-shell {
+  padding: 24px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(248,251,255,0.94));
+}
+.rule-page-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.rule-page-header { margin-bottom: 18px; }
+.rule-list-shell {
+  display: grid;
+  gap: 12px;
+}
+.rule-list-shell .list-item-card {
+  margin-bottom: 0;
+  padding: 18px 20px;
+  border-color: rgba(198, 216, 239, 0.96);
+  background: rgba(255, 255, 255, 0.94);
+}
+.rule-list-shell .list-item-card:hover {
+  border-color: rgba(11, 116, 222, 0.3);
+  box-shadow: 0 18px 34px rgba(15, 23, 42, 0.08);
+}
+.rule-dialog-form { padding: 0; }
+.rule-dialog-shell {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+.rule-dialog-title-row {
+  margin-bottom: 0;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+}
+.rule-dialog-title-row h2 {
+  font-size: 18px;
+  line-height: 1.3;
+}
+.rule-dialog-close {
+  min-height: 36px;
+  width: 36px;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted-strong);
+}
+.rule-dialog-close:hover { color: var(--text); }
+.rule-form-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+.rule-form-field { margin: 0; }
+.rule-form-field > span {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--muted-strong);
+  font-weight: 700;
+}
+.rule-canvas {
+  padding: 14px;
+  border: 2px solid rgba(59, 130, 246, 0.72);
+  border-radius: 20px;
+  background:
+    linear-gradient(rgba(59, 130, 246, 0.045) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.045) 1px, transparent 1px),
+    radial-gradient(circle at 12% 0%, rgba(37, 99, 235, 0.12), transparent 30%),
+    linear-gradient(180deg, #ffffff, #f8fbff);
+  background-size: 22px 22px, 22px 22px, auto, auto;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.92), 0 18px 42px rgba(37, 99, 235, 0.08);
+}
+.rule-builder-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 8px;
+}
+.rule-builder-topline > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+.rule-builder-summary {
+  flex: 0 0 min(420px, 42%);
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #1e3a8a;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+.rule-builder-summary.invalid {
+  border-color: #fdba74;
+  background: #fff7ed;
+  color: #c2410c;
+}
+.rule-builder-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 10px;
+  align-items: center;
+}
+.rule-builder-toolbar {
+  margin: 0 0 12px;
+  padding-top: 2px;
+}
+.rule-builder-fallback-toolbar { display: none; }
+.rule-builder-actions button,
+.rule-group-header-actions button,
+.rule-condition-actions button {
+  min-height: 36px;
+  padding: 0 13px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.rule-builder-tree {
+  position: relative;
+  display: grid;
+  gap: 12px;
+}
+.rule-workspace {
+  min-height: 240px;
+  padding: 8px;
+  border: 1px solid rgba(147, 197, 253, 0.42);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.66);
+}
+.rule-builder-tree.is-pointer-dragging { cursor: grabbing; }
+.rule-node {
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.05);
+  overflow: hidden;
+  transition: transform 140ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+.rule-node:hover,
+.rule-node:focus-within {
+  border-color: rgba(99, 102, 241, 0.3);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+.rule-node.is-dragging-source {
+  opacity: 1;
+  border-color: rgba(37, 99, 235, 0.64);
+  border-style: dashed;
+  background: rgba(219, 234, 254, 0.48);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+.rule-builder-tree.is-pointer-dragging .rule-node.is-dragging-source > * {
+  visibility: hidden;
+}
+.rule-node-group.root {
+  border-color: rgba(59, 130, 246, 0.62);
+  border-radius: 18px;
+  box-shadow: 0 0 0 1px rgba(96, 165, 250, 0.22), 0 18px 44px rgba(37, 99, 235, 0.08);
+}
+.rule-node-group.nested {
+  border-color: rgba(96, 165, 250, 0.48);
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,251,255,0.96));
+}
+.rule-node-group.rule-node-not {
+  border-style: dashed;
+  border-color: #c4b5fd;
+  background: #fcfaff;
+}
+.rule-group-shell { display: grid; }
+.rule-group-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(219, 234, 254, 0.9);
+  background: linear-gradient(180deg, rgba(239,246,255,0.98), rgba(255,255,255,0.96));
+}
+.rule-node-not .rule-group-header {
+  background: linear-gradient(180deg, rgba(248,245,255,0.98), rgba(255,255,255,0.94));
+}
+.rule-group-header-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.rule-group-header-actions,
+.rule-condition-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.rule-group-header-actions { flex-wrap: wrap; justify-content: flex-end; }
+.rule-condition-actions {
+  align-items: flex-end;
+  gap: 6px;
+  padding-bottom: 3px;
+  flex-wrap: nowrap;
+}
+.rule-condition-actions button {
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1;
+}
+.rule-group-header-actions .rule-action-primary {
+  color: #2563eb;
+  border-color: #bfdbfe;
+  background: #fff;
+}
+.rule-group-header-actions .danger,
+.rule-condition-actions .danger {
+  color: #ef4444;
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+.rule-more-button {
+  min-width: 40px;
+  padding: 0 10px !important;
+  font-size: 18px !important;
+  letter-spacing: 0.08em;
+}
+.rule-title-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 34px;
+  color: #64748b;
+}
+.rule-node-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: #64748b;
+  font-size: 16px;
+}
+.rule-node-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 70px;
+  min-height: 38px;
+  padding: 0 18px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 0.02em;
+  background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+  box-shadow: 0 8px 18px rgba(37, 99, 235, 0.22);
+}
+.rule-node-kind.rule-node-kind-or { background: linear-gradient(135deg, #a78bfa, #7c3aed); box-shadow: 0 8px 18px rgba(124, 58, 237, 0.2); }
+.rule-node-kind.rule-node-kind-not { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+.rule-node-kind.rule-node-kind-condition {
+  color: var(--primary-dark);
+  background: rgba(219, 234, 254, 0.92);
+  border: 1px solid rgba(147, 197, 253, 0.88);
+}
+.rule-node-pill-select {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.rule-inline-select {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  min-width: 100%;
+  max-width: none;
+  min-height: 100%;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.rule-group-title {
+  color: #1f2937;
+  font-size: 15px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.rule-title-edit {
+  color: #64748b;
+  font-size: 15px;
+}
+.rule-node-hint {
+  color: var(--muted-strong);
+  font-weight: 700;
+}
+.rule-node-children {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px 16px;
+  position: relative;
+}
+.rule-node-group:not(.root) .rule-node-children {
+  margin-left: 32px;
+  border-left: 2px solid rgba(147, 197, 253, 0.38);
+}
+.rule-node-condition-card {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.rule-condition-card {
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+  padding: 0;
+  box-shadow: none;
+}
+.rule-condition-row {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  min-height: 62px;
+}
+.rule-condition-leading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: 3px;
+}
+.rule-drag-handle {
+  cursor: grab;
+  min-height: 34px;
+  width: 28px;
+  padding: 0;
+  user-select: none;
+  touch-action: none;
+  color: #64748b;
+  border-color: transparent;
+  background: transparent;
+}
+.rule-drag-handle:hover,
+.rule-drag-handle:focus-visible {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+}
 .rule-drag-handle:disabled { cursor: not-allowed; }
-.rule-drag-handle:active { cursor: grabbing; }
-.rule-inline-select { width: auto; min-height: 34px; padding: 6px 10px; }
-.rule-node-hint { color: var(--muted); font-weight: 700; }
-.rule-condition-grid { flex: 1 1 520px; display: grid; grid-template-columns: minmax(105px, 0.8fr) minmax(130px, 0.9fr) minmax(220px, 1.5fr) auto; gap: 8px; align-items: end; }
-.rule-condition-grid label { margin: 0; }
-.rule-condition-grid label span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; }
-.rule-condition-grid select, .rule-condition-grid input { min-height: 36px; padding: 7px 9px; }
-.rule-case-toggle { align-self: end; min-height: 36px; margin: 0; white-space: nowrap; }
-.rule-node-children { display: grid; gap: 8px; padding: 10px 10px 10px 24px; }
-.rule-drop-zone { min-height: 28px; border: 1px dashed transparent; border-radius: var(--radius-sm); color: transparent; display: grid; place-items: center; font-size: 12px; font-weight: 800; transition: border-color 160ms ease, background 160ms ease, color 160ms ease; }
-.rule-builder-tree.is-dragging .rule-drop-zone { border-color: rgba(99, 102, 241, 0.28); color: #6366f1; }
-.rule-drop-zone:hover, .rule-drop-zone.active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary-dark); }
-.rule-quick { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
-.rule-quick summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
-.rule-advanced { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: rgba(248, 250, 252, 0.72); }
-.rule-advanced summary { cursor: pointer; color: var(--muted-strong); font-weight: 800; }
+.rule-drag-handle:active,
+.rule-builder-tree.is-pointer-dragging .rule-drag-handle { cursor: grabbing; }
+.rule-builder-tree.is-pointer-dragging .rule-node:not(.is-dragging-source) {
+  will-change: transform;
+}
+.rule-grip {
+  width: 14px;
+  height: 14px;
+  display: inline-block;
+  background-image: radial-gradient(currentColor 1.3px, transparent 1.3px);
+  background-size: 6px 6px;
+  background-position: 0 0;
+  opacity: 0.72;
+}
+.rule-condition-fields {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.05fr) minmax(118px, 0.78fr) minmax(190px, 1fr) max-content;
+  gap: 10px;
+  align-items: end;
+}
+.rule-field-cell {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+.rule-field-cell span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+.rule-select-shell {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+.rule-field-select-shell select { padding-left: 42px !important; }
+.rule-field-icon {
+  position: absolute;
+  left: 10px;
+  z-index: 1;
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  color: #2563eb !important;
+  background: #eff6ff;
+  font-size: 12px !important;
+  font-weight: 900 !important;
+  letter-spacing: 0 !important;
+  pointer-events: none;
+}
+.rule-field-icon-code { font-size: 18px !important; }
+.rule-field-cell select,
+.rule-field-cell input {
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border-color: #dbe7f6;
+  border-radius: 8px;
+  background-color: #fff;
+  color: #1f2937;
+  font-weight: 800;
+  font-size: 13px;
+}
+.rule-field-checkbox { min-width: 104px; }
+.rule-case-toggle {
+  min-height: 34px;
+  width: 100%;
+  justify-content: flex-start;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted-strong);
+  box-shadow: none;
+  white-space: nowrap;
+}
+.rule-case-toggle input {
+  width: 16px !important;
+  height: 16px;
+  min-height: 16px !important;
+  margin: 0;
+  padding: 0;
+  accent-color: #2563eb;
+  flex: 0 0 auto;
+}
+.rule-drop-zone { display: none; }
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone {
+  position: relative;
+  display: grid;
+  min-height: 10px;
+  margin: -5px 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: #2563eb;
+  font-size: 0;
+  font-weight: 800;
+  place-items: center;
+  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
+}
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::before,
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::after {
+  content: "";
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border: 3px solid #2563eb;
+  border-radius: 999px;
+  background: #fff;
+}
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone::before { left: -5px; }
+.rule-builder-tree.is-pointer-dragging .rule-drop-zone::after { right: -5px; }
+.rule-add-drop-zone {
+  display: grid;
+  gap: 10px;
+  min-height: 68px;
+  padding: 12px;
+  border: 1.5px dashed #93c5fd;
+  border-radius: 14px;
+  background: rgba(239, 246, 255, 0.62);
+  color: #2563eb;
+  font-weight: 900;
+  place-items: center;
+}
+.rule-add-drop-zone-title {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+}
+.rule-add-drop-zone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.rule-add-drop-zone-actions button {
+  min-height: 34px;
+  border-color: #bfdbfe;
+  background: #fff;
+  color: #2563eb;
+  font-weight: 900;
+}
+.rule-add-drop-zone.active {
+  border-color: #2563eb;
+  background: rgba(219, 234, 254, 0.9);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.16);
+}
+.rule-drop-zone.active {
+  min-height: var(--rule-placeholder-height, 64px) !important;
+  border: 1.5px dashed #2563eb !important;
+  background: rgba(219, 234, 254, 0.66) !important;
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.12), 0 12px 28px rgba(37, 99, 235, 0.1) !important;
+}
+.rule-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 9999;
+  width: min(560px, calc(100vw - 32px));
+  padding: 14px 16px;
+  border: 1px solid rgba(96, 165, 250, 0.78);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.98);
+  box-shadow: 0 24px 54px rgba(15, 23, 42, 0.2);
+  opacity: 0.96;
+  pointer-events: none;
+  transform-origin: top left;
+  will-change: transform;
+}
+.rule-drag-ghost-card {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: 0 26px 60px rgba(15, 23, 42, 0.22);
+}
+.rule-drag-ghost-card .rule-node {
+  margin: 0;
+  border-color: rgba(37, 99, 235, 0.72);
+  box-shadow: 0 22px 54px rgba(15, 23, 42, 0.2);
+}
+.rule-drag-ghost-card button,
+.rule-drag-ghost-card input,
+.rule-drag-ghost-card select,
+.rule-drag-ghost-card textarea {
+  pointer-events: none;
+}
+.rule-drag-ghost .rule-drag-ghost-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-weight: 800;
+}
+.rule-drag-ghost .rule-drag-ghost-body {
+  color: var(--muted-strong);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.rule-dialog-panels {
+  display: grid;
+  gap: 10px;
+}
+.rule-quick,
+.rule-advanced {
+  margin-top: 0;
+  padding: 10px 12px;
+  border: 1px solid #eef2f7;
+  border-radius: var(--radius-sm);
+  background: #fbfdff;
+}
+.rule-quick summary,
+.rule-advanced summary {
+  cursor: pointer;
+  color: var(--muted-strong);
+  font-weight: 800;
+}
+.rule-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.rule-enabled-chip {
+  margin: 0;
+  color: var(--muted-strong);
+  white-space: nowrap;
+}
+.rule-dialog-submit {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex: 1 1 auto;
+}
+.rule-dialog-submit #rule-message {
+  margin-right: auto;
+  text-align: left;
+}
 .rule-quick summary:focus-visible, .rule-advanced summary:focus-visible { outline: 3px solid rgba(11, 116, 222, 0.22); outline-offset: 4px; border-radius: var(--radius-sm); }
 .danger-badge { color: var(--danger); background: var(--danger-soft); border-color: #fecaca; }
 .ui-message-container { position: fixed; top: 18px; left: 50%; z-index: 9999; display: grid; gap: 10px; width: min(420px, calc(100vw - 32px)); transform: translateX(-50%); pointer-events: none; }
@@ -8352,17 +9006,22 @@ ${MAIL_STYLES}
   .sidebar-footer { position: static; margin-top: 18px; }
   .dashboard-main { width: min(100vw - 32px, 1180px); }
   .hero-auth { grid-template-columns: 1fr; }
-  .metric-grid, .hero-features { grid-template-columns: 1fr; }
+  .metric-grid, .hero-features, .rule-dialog-panels { grid-template-columns: 1fr; }
   .email-card { grid-template-columns: 54px 1fr; }
   .mail-viewer-grid { grid-template-columns: 1fr; }
   .mail-list-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+  .rule-form-meta-grid,
+  .rule-condition-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .rule-dialog-footer { display: grid; }
+  .rule-builder-topline { align-items: flex-start; }
+  .rule-builder-summary { flex-basis: 100%; width: 100%; }
 }
 @media (max-width: 760px) {
   main, .dashboard-main, .visitor-shell { width: min(100vw - 24px, 100%); margin-top: 16px; }
   section { padding: 16px; }
   .grid, .search-panel, .visitor-hero, .mail-viewer-topbar { display: block; }
   .toolbar > *, .search-panel > * { min-width: 100%; }
-  .page-title-row, .topbar, .visitor-header, .visitor-email-head, .card-header { align-items: flex-start; flex-direction: column; }
+  .page-title-row, .topbar, .visitor-header, .visitor-email-head, .card-header, .rule-page-toolbar { align-items: flex-start; flex-direction: column; }
   .sidebar-nav { grid-template-columns: 1fr; }
   .hero-auth { width: min(100vw - 24px, 100%); padding: 24px 0; gap: 22px; }
   .auth-card, .setup-card { padding: 24px; }
@@ -8373,11 +9032,29 @@ ${MAIL_STYLES}
   .mail-detail-view { padding: 14px; }
   .list-item-card { display: grid; }
   .item-actions { justify-content: flex-start; }
-  .rule-builder-topline { display: grid; }
-  .rule-condition-grid, .rule-grid { grid-template-columns: 1fr; }
+  .rule-builder-topline, .rule-form-meta-grid, .rule-dialog-submit, .rule-page-toolbar { display: grid; }
+  .rule-condition-fields, .rule-grid { grid-template-columns: 1fr; }
+  .rule-condition-row { grid-template-columns: 1fr; }
+  .rule-condition-leading { justify-content: flex-start; }
   .rule-node-children { padding-left: 12px; }
-  .rule-node-actions, .rule-builder-actions { width: 100%; }
-  .rule-node-actions button, .rule-builder-actions button { flex: 1 1 auto; min-height: 44px; }
+  .rule-group-header,
+  .rule-group-header-main,
+  .rule-group-header-actions,
+  .rule-condition-actions,
+  .rule-builder-actions,
+  .rule-dialog-submit { width: 100%; }
+  .rule-group-header,
+  .rule-group-header-main { flex-wrap: wrap; }
+  .rule-group-header-actions,
+  .rule-condition-actions,
+  .rule-builder-actions,
+  .rule-dialog-submit { flex-wrap: wrap; }
+  .rule-group-header-actions button,
+  .rule-condition-actions button,
+  .rule-builder-actions button,
+  .rule-dialog-submit button { flex: 1 1 auto; min-height: 44px; }
+  .rule-dialog-shell { padding: 16px; }
+  .rule-dialog-submit #rule-message { margin-right: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
@@ -8588,6 +9265,15 @@ const state = {
   ruleBuilder: null,
   ruleBuilderBound: false,
   ruleBuilderDragging: null,
+  ruleBuilderPointerId: null,
+  ruleBuilderActiveDropZone: null,
+  ruleBuilderDragOffset: null,
+  ruleBuilderLastLiveDropKey: null,
+  ruleBuilderLiveRendering: false,
+  ruleBuilderLayoutRects: null,
+  ruleBuilderPlaceholderSize: null,
+  ruleBuilderPendingPointer: null,
+  ruleBuilderMoveFrame: 0,
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0
 };
@@ -8604,6 +9290,8 @@ const loginMessage = document.querySelector("#login-message");
 const adminName = document.querySelector("#admin-name");
 const logoutButton = document.querySelector("#logout");
 let mailRefreshController = null;
+let ruleBuilderGhostEl = null;
+let ruleBuilderPointerHandle = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options.headers || {}) } });
@@ -8725,6 +9413,8 @@ async function submitRuleForm(event) {
     keyword: data.get("keyword"),
     keywords: splitRuleKeywords(data.get("keyword")),
     fields: data.getAll("fields"),
+    keywordLogic: data.get("keywordLogic"),
+    fieldLogic: data.get("fieldLogic"),
     matchMode: data.get("matchMode"),
     caseSensitive: data.has("caseSensitive"),
     enabled: data.has("enabled"),
@@ -8751,7 +9441,9 @@ async function submitLinkForm(event) {
     name: data.get("name"),
     expiresAt: expiresRaw ? new Date(expiresRaw).toISOString() : null,
     ruleIds: data.getAll("ruleIds").map(Number),
-    status: data.get("status")
+    status: data.get("status"),
+    allowRuleLogic: data.get("allowRuleLogic"),
+    blockRuleLogic: data.get("blockRuleLogic")
   };
   try {
     if (id) {
@@ -8926,7 +9618,7 @@ function renderRulesTable() {
 }
 function renderRuleItem(rule) {
   const status = rule.enabled ? '<span class="badge success">启用</span>' : '<span class="badge muted-badge">停用</span>';
-  const type = rule.action === "block" ? '<span class="badge danger-badge">黑名单</span>' : '<span class="badge success">白名单</span>';
+  const type = rule.action === "block" ? '<span class="badge danger-badge">隐藏 / 排除</span>' : '<span class="badge success">允许显示</span>';
   const summary = summarizeRuleExpression(rule.expression || legacyRuleExpression(rule));
   return '<article class="list-item-card">' +
     '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(rule.name) + '</strong><span class="badge muted-badge">#' + rule.id + '</span>' + type + status + '</div>' +
@@ -8999,7 +9691,12 @@ function readRuleExpression(form, data) {
   return buildQuickRuleExpression(data);
 }
 function defaultRuleBuilderExpression() {
-  return hydrateRuleBuilderExpression({ op: "condition", field: "subject", operator: "contains", value: "" });
+  return hydrateRuleBuilderExpression({ op: "and", children: [{ op: "condition", field: "subject", operator: "contains", value: "" }] });
+}
+function normalizeRuleBuilderRootExpression(expression) {
+  const fallback = { op: "condition", field: "subject", operator: "contains", value: "" };
+  const source = expression && typeof expression === "object" ? expression : fallback;
+  return source.op === "and" || source.op === "or" ? source : { op: "and", children: [source] };
 }
 function hydrateRuleBuilderExpression(expression) {
   const source = expression && typeof expression === "object" ? expression : { op: "condition", field: "subject", operator: "contains", value: "" };
@@ -9025,7 +9722,7 @@ function nextRuleBuilderId() {
   return "rb-" + state.ruleBuilderCounter;
 }
 function setRuleBuilderExpression(expression) {
-  state.ruleBuilder = hydrateRuleBuilderExpression(expression);
+  state.ruleBuilder = hydrateRuleBuilderExpression(normalizeRuleBuilderRootExpression(expression));
   state.ruleBuilderJsonDirty = false;
   renderRuleBuilder();
 }
@@ -9052,58 +9749,114 @@ function renderRuleBuilder() {
   syncRuleBuilderSummary();
 }
 function renderRuleBuilderNode(node, parentId, depth, index) {
-  const isGroup = node.op === "and" || node.op === "or";
-  const isNot = node.op === "not";
-  const typeLabel = isGroup ? (node.op === "and" ? "全部满足" : "任一满足") : isNot ? "NOT" : "条件";
-  const classes = "rule-node rule-node-" + node.op + (depth === 0 ? " root" : "");
-  const canMove = Boolean(parentId);
-  return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
-    '<div class="rule-node-header">' +
-      '<button type="button" class="secondary rule-drag-handle" draggable="' + (canMove ? "true" : "false") + '" data-builder-drag-id="' + escapeAttribute(node.id) + '" aria-label="拖拽移动节点"' + (canMove ? "" : " disabled") + '>拖动节点</button>' +
-      '<span class="badge muted-badge">' + escapeText(typeLabel) + '</span>' +
-      renderRuleNodeControls(node) +
-      '<div class="rule-node-actions">' + renderRuleNodeActions(node, parentId, index, isGroup) + '</div>' +
-    '</div>' + renderRuleNodeBody(node, depth) + '</div>';
+  if (node.op === "condition") return renderRuleConditionCard(node, parentId, depth, index);
+  return renderRuleGroupNode(node, parentId, depth, index);
 }
-function renderRuleNodeControls(node) {
-  if (node.op === "and" || node.op === "or") {
-    return '<select class="rule-inline-select" data-builder-op="' + escapeAttribute(node.id) + '" aria-label="条件组关系">' +
-      '<option value="and"' + (node.op === "and" ? " selected" : "") + '>AND 全部满足</option>' +
-      '<option value="or"' + (node.op === "or" ? " selected" : "") + '>OR 任一满足</option></select>';
-  }
-  if (node.op === "not") return '<span class="rule-node-hint">反向匹配子条件</span>';
-  return '<div class="rule-condition-grid">' +
-    '<label><span>字段</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></label>' +
-    '<label><span>方式</span><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></label>' +
-    '<label class="rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || "") + '" placeholder="输入关键词、地址、验证码或正则"></label>' +
-    '<label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? " checked" : "") + '> 区分大小写</label>' +
+function renderRuleGroupNode(node, parentId, depth, index) {
+  const classes = "rule-node rule-node-group rule-node-" + node.op + (depth === 0 ? " root" : " nested");
+  return '<div class="' + classes + '" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
+    '<div class="rule-group-shell">' +
+      '<div class="rule-group-header">' +
+        '<div class="rule-group-header-main">' + renderRuleGroupLead(node, parentId) + '</div>' +
+        '<div class="rule-group-header-actions">' + renderRuleNodeActions(node, parentId, index) + '</div>' +
+      '</div>' +
+      renderRuleGroupBody(node, depth) +
+    '</div>' +
   '</div>';
 }
-function renderRuleNodeActions(node, parentId, index, isGroup) {
-  const disabledRoot = parentId ? "" : " disabled";
-  return (isGroup ? '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(node.id) + '">条件</button><button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(node.id) + '">分组</button>' : '') +
-    '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + (node.op === "not" ? "取消 NOT" : "设为 NOT") + '</button>' +
-    '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '"' + disabledRoot + '>复制</button>' +
-    '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>上移</button>' +
-    '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '"' + disabledRoot + '>下移</button>' +
-    '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '"' + disabledRoot + '>删除</button>';
+function renderRuleGroupLead(node, parentId) {
+  const canMove = Boolean(parentId);
+  const leadIcon = canMove
+    ? '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"><span class="rule-grip" aria-hidden="true"></span></button>'
+    : '<span class="rule-title-grip" aria-hidden="true"><span class="rule-grip"></span></span><span class="rule-node-caret" aria-hidden="true">⌄</span>';
+  if (node.op === "not") {
+    return leadIcon + renderRuleNodeKind(node) + '<span class="rule-node-hint">反向匹配子条件</span>';
+  }
+  const title = node.op === "and" ? "全部满足" : "满足任一条件";
+  return leadIcon + '<div class="rule-node-pill-select">' + renderRuleNodeKind(node) + '<select class="rule-inline-select" data-builder-op="' + escapeAttribute(node.id) + '" aria-label="条件组关系">' +
+    '<option value="and"' + (node.op === "and" ? ' selected' : '') + '>全部满足</option>' +
+    '<option value="or"' + (node.op === "or" ? ' selected' : '') + '>满足任一条件</option></select><span class="rule-group-title">' + title + '</span><span class="rule-title-edit" aria-hidden="true">✎</span></div>';
 }
-function renderRuleNodeBody(node, depth) {
-  if (node.op === "condition") return "";
-  if (node.op === "not") return '<div class="rule-node-children">' + renderRuleBuilderNode(node.child, null, depth + 1, 0) + '</div>';
-  const children = node.children || [];
+function renderRuleConditionCard(node, parentId, depth, index) {
+  const canMove = Boolean(parentId);
+  return '<div class="rule-node rule-node-condition-card" data-builder-node-id="' + escapeAttribute(node.id) + '" data-builder-depth="' + depth + '">' +
+    '<div class="rule-condition-card">' +
+      '<div class="rule-condition-row">' +
+        '<div class="rule-condition-leading">' +
+          '<button type="button" class="secondary rule-drag-handle" data-builder-drag-id="' + escapeAttribute(node.id) + '" data-builder-drag-handle="true" aria-label="拖拽移动节点"' + (canMove ? '' : ' disabled') + '><span class="rule-grip" aria-hidden="true"></span></button>' +
+        '</div>' +
+        '<div class="rule-condition-fields">' + renderRuleConditionFields(node) + '</div>' +
+        '<div class="rule-condition-actions">' + renderRuleNodeActions(node, parentId, index) + '</div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+function renderRuleConditionFields(node) {
+  return '<label class="rule-field-cell"><span>字段</span><span class="rule-select-shell rule-field-select-shell"><span class="rule-field-icon rule-field-icon-' + escapeAttribute(node.field) + '">' + ruleFieldIcon(node.field) + '</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell"><span>方式</span><span class="rule-select-shell"><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="' + escapeAttribute(ruleValuePlaceholder(node)) + '"></label>' +
+    '<div class="rule-field-cell rule-field-checkbox"><span>&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
+}
+function ruleFieldIcon(field) {
+  if (field === "from" || field === "to") return "✉";
+  if (field === "code") return "#";
+  if (field === "html") return "&lt;/&gt;";
+  return "T";
+}
+function ruleValuePlaceholder(node) {
+  if (node.operator === "regex") return "输入正则表达式";
+  if (node.field === "from" || node.field === "to") return "输入邮箱地址或域名";
+  if (node.field === "code") return "输入验证码";
+  return node.operator === "exact" ? "输入完整匹配内容" : "输入关键词、地址、验证码或正则";
+}
+function renderRuleNodeKind(node) {
+  const kind = node.op === "and" ? "AND" : node.op === "or" ? "OR" : node.op === "not" ? "NOT" : "条件";
+  const className = node.op === "or" ? " rule-node-kind-or" : node.op === "not" ? " rule-node-kind-not" : node.op === "condition" ? " rule-node-kind-condition" : "";
+  return '<span class="rule-node-kind' + className + '">' + escapeText(kind) + '</span>';
+}
+function renderRuleNodeActions(node, parentId, index) {
+  const canMove = Boolean(parentId);
+  const toggleLabel = node.op === 'not' ? '取消 NOT' : '取反';
+  const groupAdds = node.op === "and" || node.op === "or"
+    ? '<button type="button" class="secondary rule-action-primary" data-builder-add-condition="' + escapeAttribute(node.id) + '">＋ 添加条件</button>' +
+      '<button type="button" class="secondary rule-action-primary" data-builder-add-group="' + escapeAttribute(node.id) + '">＋ 添加规则组</button>'
+    : '';
+  const moveActions = canMove
+    ? '<button type="button" class="secondary" data-builder-move="up" data-builder-move-id="' + escapeAttribute(node.id) + '">↑ 上移</button>' +
+      '<button type="button" class="secondary" data-builder-move="down" data-builder-move-id="' + escapeAttribute(node.id) + '">↓ 下移</button>' +
+      '<button type="button" class="danger" data-builder-delete="' + escapeAttribute(node.id) + '">删除</button>'
+    : '<button type="button" class="secondary rule-more-button" data-builder-reset="true" aria-label="重置条件组" title="重置条件组">…</button>';
+  return groupAdds +
+    '<button type="button" class="secondary" data-builder-duplicate="' + escapeAttribute(node.id) + '">复制</button>' +
+    '<button type="button" class="secondary" data-builder-toggle-not="' + escapeAttribute(node.id) + '">' + toggleLabel + '</button>' +
+    moveActions;
+}
+function renderRuleGroupBody(node, depth) {
+  const children = node.op === 'not' ? [node.child] : (node.children || []);
   let html = '<div class="rule-node-children" data-builder-group="' + escapeAttribute(node.id) + '">';
   children.forEach((child, index) => {
-    html += renderDropZone(node.id, index) + renderRuleBuilderNode(child, node.id, depth + 1, index);
+    if (node.op !== 'not') html += renderDropZone(node.id, index);
+    html += renderRuleBuilderNode(child, node.op === 'not' ? null : node.id, depth + 1, index);
   });
-  html += renderDropZone(node.id, children.length) + '</div>';
+  if (node.op !== 'not') html += renderDropZone(node.id, children.length);
+  if (node.op !== 'not') html += renderRuleGroupAddZone(node.id, children.length);
+  html += '</div>';
   return html;
 }
+function renderRuleGroupAddZone(groupId, index) {
+  return '<div class="rule-add-drop-zone" data-builder-drop-parent="' + escapeAttribute(groupId) + '" data-builder-drop-index="' + index + '" aria-label="拖放或在此条件组底部添加节点">' +
+    '<span class="rule-add-drop-zone-title">拖到这里，或继续添加</span>' +
+    '<div class="rule-add-drop-zone-actions">' +
+      '<button type="button" class="secondary" data-builder-add-condition="' + escapeAttribute(groupId) + '">＋ 添加条件</button>' +
+      '<button type="button" class="secondary" data-builder-add-group="' + escapeAttribute(groupId) + '">＋ 添加规则组</button>' +
+    '</div>' +
+  '</div>';
+}
 function renderDropZone(parentId, index) {
-  return '<div class="rule-drop-zone" data-builder-drop-parent="' + escapeAttribute(parentId) + '" data-builder-drop-index="' + index + '" aria-label="拖放到此位置">拖放到这里</div>';
+  return '<div class="rule-drop-zone" data-builder-drop-parent="' + escapeAttribute(parentId) + '" data-builder-drop-index="' + index + '" aria-label="拖放到此位置"><span>插入位置</span></div>';
 }
 function ruleOptions(values, selected, labels) {
-  return values.map((value) => '<option value="' + escapeAttribute(value) + '"' + (value === selected ? " selected" : "") + '>' + escapeText(labels[value] || value) + '</option>').join("");
+  return values.map((value) => '<option value="' + escapeAttribute(value) + '"' + (value === selected ? ' selected' : '') + '>' + escapeText(labels[value] || value) + '</option>').join('');
 }
 function bindRuleBuilderEvents() {
   const root = optional("#rule-builder-root");
@@ -9112,11 +9865,11 @@ function bindRuleBuilderEvents() {
   root.addEventListener("input", handleRuleBuilderInput);
   root.addEventListener("change", handleRuleBuilderInput);
   root.addEventListener("click", handleRuleBuilderClick);
-  root.addEventListener("dragstart", handleRuleBuilderDragStart);
-  root.addEventListener("dragover", handleRuleBuilderDragOver);
-  root.addEventListener("dragleave", handleRuleBuilderDragLeave);
-  root.addEventListener("drop", handleRuleBuilderDrop);
-  root.addEventListener("dragend", clearRuleBuilderDropState);
+  root.addEventListener("pointerdown", handleRuleBuilderPointerDown);
+  root.addEventListener("lostpointercapture", handleRuleBuilderLostPointerCapture, true);
+  document.addEventListener("pointermove", handleRuleBuilderPointerMove);
+  document.addEventListener("pointerup", handleRuleBuilderPointerUp);
+  document.addEventListener("pointercancel", handleRuleBuilderPointerCancel);
 }
 function handleRuleBuilderInput(event) {
   const target = event.target;
@@ -9124,11 +9877,22 @@ function handleRuleBuilderInput(event) {
   if (!id) return;
   const node = findRuleBuilderNode(state.ruleBuilder, id);
   if (!node) return;
-  if (target.dataset.builderField) node.field = target.value;
-  if (target.dataset.builderOperator) node.operator = target.value;
+  let shouldRender = false;
+  if (target.dataset.builderField) {
+    node.field = target.value;
+    shouldRender = true;
+  }
+  if (target.dataset.builderOperator) {
+    node.operator = target.value;
+    shouldRender = true;
+  }
   if (target.dataset.builderValue) node.value = target.value;
   if (target.dataset.builderCase) node.caseSensitive = target.checked;
-  if (target.dataset.builderOp && (target.value === "and" || target.value === "or")) node.op = target.value;
+  if (target.dataset.builderOp && (target.value === "and" || target.value === "or")) {
+    node.op = target.value;
+    shouldRender = true;
+  }
+  if (shouldRender) return renderRuleBuilder();
   syncRuleBuilderJson();
 }
 function handleRuleBuilderClick(event) {
@@ -9140,42 +9904,257 @@ function handleRuleBuilderClick(event) {
   if (target.dataset.builderDelete) deleteRuleBuilderNode(target.dataset.builderDelete);
   if (target.dataset.builderDuplicate) duplicateRuleBuilderNode(target.dataset.builderDuplicate);
   if (target.dataset.builderMove) moveRuleBuilderSibling(target.dataset.builderMoveId, target.dataset.builderMove);
+  if (target.dataset.builderReset) resetRuleBuilderToDefault();
 }
-function handleRuleBuilderDragStart(event) {
+function handleRuleBuilderPointerDown(event) {
   const handle = event.target.closest("[data-builder-drag-id]");
-  if (!handle || handle.disabled || !event.dataTransfer) return;
+  if (!handle || handle.disabled || event.button !== 0 || state.ruleBuilderDragging) return;
+  event.preventDefault();
   state.ruleBuilderDragging = handle.dataset.builderDragId;
-  event.dataTransfer.setData("text/plain", state.ruleBuilderDragging);
-  event.dataTransfer.effectAllowed = "move";
-  optional("#rule-builder-root")?.classList.add("is-dragging");
-  handle.closest("[data-builder-node-id]")?.classList.add("is-dragging");
+  state.ruleBuilderPointerId = event.pointerId;
+  state.ruleBuilderLastLiveDropKey = null;
+  ruleBuilderPointerHandle = handle;
+  try { handle.setPointerCapture(event.pointerId); } catch (error) {}
+  const root = optional("#rule-builder-root");
+  root?.classList.add("is-pointer-dragging");
+  const sourceNode = handle.closest("[data-builder-node-id]");
+  state.ruleBuilderDragOffset = getRuleBuilderDragOffset(sourceNode, event.clientX, event.clientY);
+  state.ruleBuilderPlaceholderSize = getRuleBuilderPlaceholderSize(sourceNode);
+  sourceNode?.classList.add("is-dragging-source");
+  createRuleBuilderGhost(state.ruleBuilderDragging, event.clientX, event.clientY, sourceNode);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
   optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
 }
-function handleRuleBuilderDragOver(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (!zone || !state.ruleBuilderDragging) return;
+function handleRuleBuilderPointerMove(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
   event.preventDefault();
-  zone.classList.add("active");
-  event.dataTransfer.dropEffect = "move";
+  state.ruleBuilderPendingPointer = { x: event.clientX, y: event.clientY };
+  if (state.ruleBuilderMoveFrame) return;
+  state.ruleBuilderMoveFrame = requestAnimationFrame(processRuleBuilderPointerMove);
 }
-function handleRuleBuilderDragLeave(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (zone) zone.classList.remove("active");
+function processRuleBuilderPointerMove() {
+  state.ruleBuilderMoveFrame = 0;
+  const point = state.ruleBuilderPendingPointer;
+  if (!point || !state.ruleBuilderDragging) return;
+  updateRuleBuilderGhostPosition(point.x, point.y);
+  const zone = resolveRuleBuilderDropZone(point.x, point.y);
+  const moved = liveMoveRuleBuilderNode(zone, point.x, point.y);
+  if (!moved) syncRuleBuilderActiveZone(zone);
 }
-function handleRuleBuilderDrop(event) {
-  const zone = event.target.closest("[data-builder-drop-parent]");
-  if (!zone) return;
-  event.preventDefault();
-  const sourceId = state.ruleBuilderDragging || event.dataTransfer.getData("text/plain");
-  const moved = moveRuleBuilderNode(sourceId, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex));
-  optional("#rule-message").textContent = moved ? "已移动节点" : "无法移动到该位置";
+function flushRuleBuilderPointerMove() {
+  if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
+  state.ruleBuilderMoveFrame = 0;
+  processRuleBuilderPointerMove();
+}
+function handleRuleBuilderPointerUp(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  flushRuleBuilderPointerMove();
+  const hadLiveMove = Boolean(state.ruleBuilderLastLiveDropKey);
+  const zone = state.ruleBuilderActiveDropZone;
+  const moved = !hadLiveMove && zone
+    ? moveRuleBuilderNode(state.ruleBuilderDragging, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex))
+    : false;
+  optional("#rule-message").textContent = hadLiveMove ? "已完成拖拽排序" : moved ? "已移动节点" : zone ? "无法移动到该位置" : "已取消拖拽";
   clearRuleBuilderDropState();
 }
+function handleRuleBuilderPointerCancel(event) {
+  if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
+  clearRuleBuilderDropState();
+}
+function handleRuleBuilderLostPointerCapture(event) {
+  if (!state.ruleBuilderDragging || state.ruleBuilderLiveRendering) return;
+  if (event.target !== ruleBuilderPointerHandle) return;
+  clearRuleBuilderDropState();
+}
+function liveMoveRuleBuilderNode(zone, x, y) {
+  if (!zone || !state.ruleBuilderDragging) return false;
+  const parentId = zone.dataset.builderDropParent;
+  const targetIndex = Number(zone.dataset.builderDropIndex);
+  const key = parentId + ":" + targetIndex;
+  if (state.ruleBuilderLastLiveDropKey === key) return false;
+  state.ruleBuilderLayoutRects = captureRuleBuilderLayoutRects();
+  state.ruleBuilderLiveRendering = true;
+  let moved = false;
+  try {
+    moved = moveRuleBuilderNode(state.ruleBuilderDragging, parentId, targetIndex);
+  } finally {
+    state.ruleBuilderLiveRendering = false;
+  }
+  if (!moved) {
+    state.ruleBuilderLayoutRects = null;
+    return false;
+  }
+  state.ruleBuilderLastLiveDropKey = key;
+  restoreRuleBuilderLiveDragState(x, y);
+  animateRuleBuilderLayout();
+  optional("#rule-message").textContent = "拖动中：排序已实时更新，松开完成";
+  return true;
+}
+function restoreRuleBuilderLiveDragState(x, y) {
+  optional("#rule-builder-root")?.classList.add("is-pointer-dragging");
+  document.querySelector('[data-builder-node-id="' + cssEscapeAttribute(state.ruleBuilderDragging) + '"]')?.classList.add("is-dragging-source");
+  updateRuleBuilderGhostPosition(x, y);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(x, y));
+}
+function captureRuleBuilderLayoutRects() {
+  const rects = new Map();
+  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => {
+    rects.set(node.dataset.builderNodeId, node.getBoundingClientRect());
+  });
+  return rects;
+}
+function animateRuleBuilderLayout() {
+  const rects = state.ruleBuilderLayoutRects;
+  state.ruleBuilderLayoutRects = null;
+  if (!rects) return;
+  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => animateRuleBuilderNodeShift(node, rects));
+}
+function animateRuleBuilderNodeShift(node, rects) {
+  const before = rects.get(node.dataset.builderNodeId);
+  if (!before || node.classList.contains("is-dragging-source")) return;
+  const after = node.getBoundingClientRect();
+  const deltaX = before.left - after.left;
+  const deltaY = before.top - after.top;
+  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
+  node.style.transition = "none";
+  node.style.transform = "translate(" + deltaX + "px," + deltaY + "px)";
+  node.getBoundingClientRect();
+  requestAnimationFrame(() => {
+    node.style.transition = "transform 180ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease";
+    node.style.transform = "";
+  });
+}
+function cssEscapeAttribute(value) {
+  return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+function resolveRuleBuilderDropZone(x, y) {
+  const hits = getRuleBuilderPointHits(x, y);
+  return resolveRuleBuilderDirectDropZone(hits) ||
+    resolveRuleBuilderNodeDropZone(hits, y) ||
+    resolveRuleBuilderGroupEndDropZone(hits, y);
+}
+function getRuleBuilderPointHits(x, y) {
+  return typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+}
+function resolveRuleBuilderDirectDropZone(hits) {
+  for (const hit of hits) {
+    const zone = hit?.closest?.("[data-builder-drop-parent]");
+    if (zone) return zone;
+  }
+  return null;
+}
+function resolveRuleBuilderNodeDropZone(hits, y) {
+  for (const hit of hits) {
+    const nodeElement = hit?.closest?.("#rule-builder-root [data-builder-node-id]");
+    const nodeId = nodeElement?.dataset?.builderNodeId;
+    const found = nodeId ? findRuleBuilderParent(state.ruleBuilder, nodeId) : null;
+    if (!found || !Array.isArray(found.parent.children)) continue;
+    const rect = nodeElement.getBoundingClientRect();
+    const index = found.index + (y > rect.top + rect.height / 2 ? 1 : 0);
+    const zone = findRuleBuilderDropZone(found.parent.id, index);
+    if (zone) return zone;
+  }
+  return null;
+}
+function resolveRuleBuilderGroupEndDropZone(hits, y) {
+  for (const hit of hits) {
+    const groupElement = hit?.closest?.("#rule-builder-root [data-builder-group]");
+    const groupId = groupElement?.dataset?.builderGroup;
+    const group = groupId ? findRuleBuilderNode(state.ruleBuilder, groupId) : null;
+    if (!group || (group.op !== "and" && group.op !== "or")) continue;
+    const rect = groupElement.getBoundingClientRect();
+    if (y < rect.top + rect.height * 0.45) continue;
+    const zone = findRuleBuilderDropZone(group.id, group.children.length);
+    if (zone) return zone;
+  }
+  return null;
+}
+function findRuleBuilderDropZone(parentId, index) {
+  return document.querySelector('[data-builder-drop-parent="' + cssEscapeAttribute(parentId) + '"][data-builder-drop-index="' + index + '"]');
+}
+function syncRuleBuilderActiveZone(zone) {
+  if (state.ruleBuilderActiveDropZone === zone) return;
+  if (state.ruleBuilderActiveDropZone) {
+    state.ruleBuilderActiveDropZone.classList.remove("active");
+    state.ruleBuilderActiveDropZone.style.removeProperty("--rule-placeholder-height");
+  }
+  state.ruleBuilderActiveDropZone = zone || null;
+  if (state.ruleBuilderActiveDropZone) {
+    state.ruleBuilderActiveDropZone.classList.add("active");
+    const size = state.ruleBuilderPlaceholderSize;
+    if (size?.height) state.ruleBuilderActiveDropZone.style.setProperty("--rule-placeholder-height", size.height + "px");
+  }
+}
+function createRuleBuilderGhost(sourceId, x, y, sourceElement) {
+  const node = findRuleBuilderNode(state.ruleBuilder, sourceId);
+  if (!node) return;
+  if (!ruleBuilderGhostEl) {
+    ruleBuilderGhostEl = document.createElement("div");
+    document.body.appendChild(ruleBuilderGhostEl);
+  }
+  ruleBuilderGhostEl.className = "rule-drag-ghost" + (sourceElement ? " rule-drag-ghost-card" : "");
+  if (sourceElement) renderRuleBuilderGhostCard(sourceElement);
+  else ruleBuilderGhostEl.innerHTML = '<div class="rule-drag-ghost-title">' + renderRuleNodeKind(node) + '<span>' + escapeText(ruleBuilderGhostTitle(node)) + '</span></div><div class="rule-drag-ghost-body">' + escapeText(ruleBuilderGhostBody(node)) + '</div>';
+  updateRuleBuilderGhostPosition(x, y);
+}
+function renderRuleBuilderGhostCard(sourceElement) {
+  const rect = sourceElement.getBoundingClientRect();
+  const clone = sourceElement.cloneNode(true);
+  clone.classList.remove("is-dragging-source");
+  clone.querySelectorAll("[id]").forEach((item) => item.removeAttribute("id"));
+  clone.querySelectorAll("button, input, select, textarea").forEach((item) => item.setAttribute("tabindex", "-1"));
+  ruleBuilderGhostEl.style.width = Math.min(rect.width, window.innerWidth - 32) + "px";
+  ruleBuilderGhostEl.innerHTML = "";
+  ruleBuilderGhostEl.appendChild(clone);
+}
+function getRuleBuilderDragOffset(sourceElement, x, y) {
+  if (!sourceElement) return { x: -18, y: -18 };
+  const rect = sourceElement.getBoundingClientRect();
+  return { x: x - rect.left, y: y - rect.top };
+}
+function getRuleBuilderPlaceholderSize(sourceElement) {
+  if (!sourceElement) return null;
+  const rect = sourceElement.getBoundingClientRect();
+  return { width: rect.width, height: rect.height };
+}
+function updateRuleBuilderGhostPosition(x, y) {
+  if (!ruleBuilderGhostEl) return;
+  const offset = state.ruleBuilderDragOffset || { x: -18, y: -18 };
+  ruleBuilderGhostEl.style.transform = 'translate(' + (x - offset.x) + 'px,' + (y - offset.y) + 'px)';
+}
+function ruleBuilderGhostTitle(node) {
+  if (node.op === "condition") return "条件节点";
+  if (node.op === "not") return "NOT 分组";
+  return node.op.toUpperCase() + " 分组";
+}
+function ruleBuilderGhostBody(node) {
+  if (node.op === "condition") return (RULE_FIELD_LABELS[node.field] || node.field) + ' ' + (RULE_OPERATOR_LABELS[node.operator] || node.operator) + ' ' + String(node.value || '');
+  if (node.op === "not") return '反向匹配：' + summarizeRuleExpression(stripRuleBuilderMetadata(node.child));
+  return '包含 ' + String((node.children || []).length) + ' 个子节点';
+}
 function clearRuleBuilderDropState() {
+  const pointerId = state.ruleBuilderPointerId;
   state.ruleBuilderDragging = null;
-  document.querySelectorAll(".rule-drop-zone.active").forEach((zone) => zone.classList.remove("active"));
-  document.querySelectorAll(".rule-node.is-dragging").forEach((node) => node.classList.remove("is-dragging"));
-  optional("#rule-builder-root")?.classList.remove("is-dragging");
+  state.ruleBuilderPointerId = null;
+  state.ruleBuilderDragOffset = null;
+  state.ruleBuilderLastLiveDropKey = null;
+  state.ruleBuilderLiveRendering = false;
+  state.ruleBuilderLayoutRects = null;
+  state.ruleBuilderPlaceholderSize = null;
+  state.ruleBuilderPendingPointer = null;
+  if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
+  state.ruleBuilderMoveFrame = 0;
+  syncRuleBuilderActiveZone(null);
+  document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source"));
+  optional("#rule-builder-root")?.classList.remove("is-pointer-dragging");
+  if (ruleBuilderGhostEl) {
+    ruleBuilderGhostEl.remove();
+    ruleBuilderGhostEl = null;
+  }
+  if (ruleBuilderPointerHandle && pointerId !== null) {
+    try { ruleBuilderPointerHandle.releasePointerCapture(pointerId); } catch (error) {}
+  }
+  ruleBuilderPointerHandle = null;
 }
 function addRuleBuilderChild(kind, parentId) {
   ensureRuleBuilderGroupRoot();
@@ -9220,10 +10199,14 @@ function moveRuleBuilderNode(sourceId, parentId, index) {
   if (!oldParent || oldParent.parent.op === "not") return false;
   let targetIndex = Number.isFinite(index) ? index : parent.children.length;
   if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
+  const currentParent = parent;
+  const currentLength = currentParent.children.length;
+  const safeIndex = Math.max(0, Math.min(targetIndex, currentLength));
+  if (oldParent.parent.id === currentParent.id && oldParent.index === safeIndex) return false;
   const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
-  if (!detached) return;
-  const safeIndex = Math.max(0, Math.min(targetIndex, parent.children.length));
-  parent.children.splice(safeIndex, 0, detached);
+  if (!detached) return false;
+  const insertIndex = Math.max(0, Math.min(safeIndex, currentParent.children.length));
+  currentParent.children.splice(insertIndex, 0, detached);
   renderRuleBuilder();
   return true;
 }
@@ -9277,6 +10260,12 @@ function cloneRuleBuilderNode(node) {
   return hydrateRuleBuilderExpression(stripRuleBuilderMetadata(node));
 }
 function duplicateRuleBuilderNode(id) {
+  if (state.ruleBuilder?.id === id) {
+    const cloned = cloneRuleBuilderNode(state.ruleBuilder);
+    state.ruleBuilder = hydrateRuleBuilderExpression({ op: "and", children: [stripRuleBuilderMetadata(state.ruleBuilder), stripRuleBuilderMetadata(cloned)] });
+    renderRuleBuilder();
+    return;
+  }
   const found = findRuleBuilderParent(state.ruleBuilder, id);
   if (!found || found.parent.op === "not") return;
   found.parent.children.splice(found.index + 1, 0, cloneRuleBuilderNode(found.parent.children[found.index]));
@@ -9390,10 +10379,13 @@ function renderLinksTable() {
 function renderLinkItem(link) {
   const status = link.status === "active" ? '<span class="badge success">active</span>' : '<span class="badge muted-badge">disabled</span>';
   const copyHint = link.url ? "复制链接" : "旧链接缺少明文 token，请先重置链接";
+  const allowLogic = link.allowRuleLogic === "and" ? "允许全部命中" : "允许任一命中";
+  const blockLogic = link.blockRuleLogic === "and" ? "排除全部命中" : "排除任一命中";
   return '<article class="list-item-card">' +
     '<div class="item-main"><div class="item-title-row"><strong>' + escapeText(link.name || "未命名") + '</strong><span class="badge muted-badge">#' + link.id + '</span>' + status + '</div>' +
     '<div class="item-meta">' + renderMetaPill("规则", link.ruleIds.join(", ") || "无") + renderMetaPill("过期", formatDate(link.expires_at)) +
-    renderMetaPill("窗口", String(link.window_minutes || 30) + " 分钟") + renderMetaPill("最近访问", formatDate(link.last_accessed_at)) + '</div></div>' +
+    renderMetaPill("规则关系", allowLogic + " / " + blockLogic) + renderMetaPill("窗口", String(link.window_minutes || 30) + " 分钟") +
+    renderMetaPill("最近访问", formatDate(link.last_accessed_at)) + '</div></div>' +
     '<div class="item-actions"><button type="button" class="secondary" data-edit-link="' + link.id + '">编辑</button>' +
     '<button type="button" class="secondary" title="' + escapeAttribute(copyHint) + '" data-copy-link="' + link.id + '">复制</button>' +
     '<button type="button" class="secondary" data-reset-link="' + link.id + '">重置链接</button>' +
@@ -9410,6 +10402,8 @@ function resetLinkForm() {
   form.reset();
   form.elements.id.value = "";
   form.elements.status.value = "active";
+  form.elements.allowRuleLogic.value = "or";
+  form.elements.blockRuleLogic.value = "or";
   populateShareRules();
   optional("#link-form-title").textContent = "添加分享链接";
   optional("#link-submit").textContent = "生成链接";
@@ -9424,6 +10418,8 @@ function editLink(id) {
   form.elements.name.value = link.name || "";
   form.elements.expiresAt.value = toDatetimeLocal(link.expires_at);
   form.elements.status.value = link.status || "active";
+  form.elements.allowRuleLogic.value = link.allowRuleLogic || "or";
+  form.elements.blockRuleLogic.value = link.blockRuleLogic || "or";
   populateShareRules(link.ruleIds);
   optional("#link-form-title").textContent = "编辑分享链接";
   optional("#link-submit").textContent = "保存修改";
@@ -9460,7 +10456,7 @@ function populateShareRules(selectedIds = []) {
   select.innerHTML = ["allow", "block"].map((action) => {
     const groupRules = rules.filter((rule) => (rule.action || "allow") === action);
     if (groupRules.length === 0) return "";
-    const label = action === "block" ? "屏蔽规则（命中后隐藏）" : "允许规则（至少选择一个）";
+    const label = action === "block" ? "隐藏 / 排除动作（命中后隐藏）" : "允许显示动作（至少选择一个）";
     return '<optgroup label="' + escapeAttribute(label) + '">' + groupRules.map((rule) => renderShareRuleOption(rule, selected)).join("") + '</optgroup>';
   }).join("");
 }
@@ -9693,13 +10689,13 @@ function mailSection() {
 }
 __name(mailSection, "mailSection");
 function rulesSection() {
-  return String.raw`<section id="rule-center">
-  <div class="card-header">
-    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">独立维护访客可见邮件的匹配规则。</p></div>
+  return String.raw`<section id="rule-center" class="rule-page-shell">
+  <div class="rule-page-toolbar rule-page-header">
+    <div class="card-title"><p class="page-kicker">Rules</p><h1>规则管理</h1><p class="muted">按命中后动作维护访客可见邮件，支持允许显示与隐藏排除。</p></div>
     <button id="open-rule-form" type="button">添加规则</button>
   </div>
   ${ruleForm()}
-  <div id="rules-table"></div>
+  <div id="rules-table" class="rule-list-shell"></div>
 </section>`;
 }
 __name(rulesSection, "rulesSection");
@@ -9728,42 +10724,51 @@ function databaseSection() {
 __name(databaseSection, "databaseSection");
 function ruleForm() {
   return String.raw`<dialog id="rule-dialog" class="modal-card" aria-labelledby="rule-form-title">
-<form id="rule-form" class="modal-form">
+<form id="rule-form" class="modal-form rule-dialog-form">
   <input type="hidden" name="id">
-  <div class="modal-title-row"><h2 id="rule-form-title">添加规则</h2><button type="button" class="secondary" data-close-dialog="rule-dialog">关闭</button></div>
-  <label>规则名称</label><input name="name" placeholder="例如：Netflix 登录验证码" required>
-  <label>规则类型</label>
-  <select name="action"><option value="allow">白名单：命中后允许显示</option><option value="block">黑名单：命中后隐藏邮件</option></select>
-  <div class="rule-builder-panel" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
-    <div class="rule-builder-topline">
-      <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR / NOT，拖拽排序或移动到其他分组。</p></div>
-      <div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-add-condition">添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">添加分组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
+  <div class="rule-dialog-shell">
+    <div class="modal-title-row rule-dialog-title-row"><div><h2 id="rule-form-title">添加规则</h2></div><button type="button" class="secondary rule-dialog-close" data-close-dialog="rule-dialog" aria-label="关闭">×</button></div>
+    <div class="rule-form-meta-grid">
+      <label class="rule-form-field"><span>规则名称</span><input name="name" placeholder="例如：Netflix 登录验证码" required></label>
+      <label class="rule-form-field"><span>命中后动作</span><select name="action"><option value="allow">允许显示：命中后可在访客链接中显示</option><option value="block">隐藏 / 排除：命中后从访客链接中隐藏</option></select></label>
     </div>
-    <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
-    <div id="rule-builder-root" class="rule-builder-tree" aria-label="规则条件树"></div>
+    <div class="rule-canvas" role="group" aria-labelledby="rule-builder-title" aria-describedby="rule-builder-help">
+      <div class="rule-builder-topline">
+        <div><strong id="rule-builder-title">可视化条件组</strong><p id="rule-builder-help" class="muted">用条件卡片组合 AND / OR 关系，拖拽排序或移动到其他分组。</p></div>
+        <div id="rule-builder-summary" class="rule-builder-summary" role="status" aria-live="polite">当前表达式：未配置</div>
+      </div>
+      <div class="rule-builder-actions rule-builder-toolbar rule-builder-fallback-toolbar"><button type="button" class="secondary" id="rule-builder-add-condition">＋ 添加条件</button><button type="button" class="secondary" id="rule-builder-add-group">＋ 添加规则组</button><button type="button" class="secondary" id="rule-builder-reset">重置</button></div>
+      <div id="rule-builder-root" class="rule-builder-tree rule-workspace" aria-label="规则条件树"></div>
+    </div>
+    <div class="rule-dialog-panels">
+      <details class="rule-quick"><summary>批量生成条件</summary>
+        <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
+        <div class="rule-grid">
+          <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
+          <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
+        </div>
+        <label>匹配字段</label>
+        <div class="chips">
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
+          <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
+        </div>
+        <div class="rule-grid">
+          <div><label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select></div>
+          <label class="checkbox-pill rule-enabled-chip"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
+        </div>
+        <button type="button" class="secondary" id="rule-builder-quick-apply">应用到可视化编辑器</button>
+      </details>
+      <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
+    </div>
+    <div class="rule-dialog-footer">
+      <label class="checkbox-pill rule-enabled-chip"><input type="checkbox" name="enabled" checked> 启用规则</label>
+      <div class="rule-dialog-submit"><span id="rule-message" class="muted" role="status" aria-live="polite"></span><button type="button" class="secondary" data-close-dialog="rule-dialog">取消</button><button id="rule-submit" type="submit">保存规则</button></div>
+    </div>
   </div>
-  <details class="rule-quick"><summary>批量生成条件</summary>
-    <label>关键词（支持多行或逗号分隔）</label><textarea name="keyword" rows="4" placeholder="netflix&#10;verification code&#10;account access"></textarea>
-    <div class="rule-grid">
-      <div><label>关键词关系</label><select name="keywordLogic"><option value="any">任一关键词命中</option><option value="all">所有关键词都命中</option></select></div>
-      <div><label>字段关系</label><select name="fieldLogic"><option value="any">任一字段命中</option><option value="all">每个选中字段都命中</option></select></div>
-    </div>
-    <label>匹配字段</label>
-    <div class="chips">
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="from"> From</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="to"> To</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="subject" checked> Subject</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="text" checked> Text</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="html"> HTML</label>
-      <label class="checkbox-pill"><input type="checkbox" name="fields" value="code" checked> Code</label>
-    </div>
-    <label>匹配方式</label><select name="matchMode"><option value="contains">包含</option><option value="exact">完全相等</option><option value="startsWith">开头匹配</option><option value="endsWith">结尾匹配</option><option value="regex">正则表达式</option></select>
-    <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="caseSensitive"> 区分大小写</label>
-    <button type="button" class="secondary" id="rule-builder-quick-apply">应用到可视化编辑器</button>
-  </details>
-  <details class="rule-advanced"><summary>高级表达式 JSON 预览 / 导入</summary><textarea id="rule-expression-json" name="expressionJson" rows="8" spellcheck="false" placeholder='{"op":"and","children":[{"op":"condition","field":"subject","operator":"contains","value":"Netflix"}]}'></textarea><div class="rule-builder-actions"><button type="button" class="secondary" id="rule-builder-import">导入 JSON</button><button type="button" class="secondary" id="rule-builder-copy-json">复制 JSON</button></div><p class="muted">JSON 会随可视化编辑器自动刷新；手动修改后请点击“导入 JSON”。</p></details>
-  <label class="checkbox-pill" style="margin-top:14px"><input type="checkbox" name="enabled" checked> 启用规则</label>
-  <div class="form-actions"><button id="rule-submit" type="submit">保存规则</button><span id="rule-message" class="muted" role="status" aria-live="polite"></span></div>
 </form>
 </dialog>`;
 }
@@ -9776,6 +10781,10 @@ function shareForm() {
   <label>链接名称</label><input name="name" placeholder="例如：临时访客">
   <label>过期时间</label><input name="expiresAt" type="datetime-local">
   <label>绑定规则</label><select id="share-rules" name="ruleIds" multiple size="7" required></select>
+  <div class="rule-grid">
+    <div><label>允许规则关系</label><select name="allowRuleLogic"><option value="or">任一允许规则命中即可显示</option><option value="and">全部允许规则都命中才显示</option></select></div>
+    <div><label>排除规则关系</label><select name="blockRuleLogic"><option value="or">任一排除规则命中即隐藏</option><option value="and">全部排除规则都命中才隐藏</option></select></div>
+  </div>
   <label>状态</label><select name="status"><option value="active">启用</option><option value="disabled">停用</option></select>
   <div class="form-actions"><button id="link-submit" type="submit">生成链接</button><span id="link-message" class="muted"></span></div>
 </form>
@@ -10125,7 +11134,12 @@ async function visitorEmails(c) {
   const requestedPage = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
   const rules = await getRulesByIds(c.env.DB, link.ruleIds);
   const candidates = await listCandidateEmailDetailsSince(c.env.DB, since);
-  const matchedEmails = candidates.filter((email) => evaluateRuleSet(emailDetailToRuleInput(email), rules).visible).map((email) => ({
+  const matchedEmails = candidates.filter(
+    (email) => evaluateRuleSet(emailDetailToRuleInput(email), rules, {
+      allowRuleLogic: link.allow_rule_logic,
+      blockRuleLogic: link.block_rule_logic
+    }).visible
+  ).map((email) => ({
     subject: email.subject,
     receivedAt: email.received_at,
     codes: email.codes.map((code) => code.code),

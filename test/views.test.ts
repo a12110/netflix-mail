@@ -69,6 +69,8 @@ describe("view templates", () => {
     expect(rulesHtml).toContain("lostpointercapture");
     expect(rulesHtml).toContain("setPointerCapture");
     expect(rulesHtml).toContain("elementsFromPoint");
+    expect(rulesHtml).toContain("resolveRuleBuilderNodeDropZone");
+    expect(rulesHtml).toContain("findRuleBuilderDropZone");
     expect(rulesHtml).toContain("rule-drag-ghost");
     expect(rulesHtml).not.toContain("dragstart");
     expect(rulesHtml).not.toContain("dragover");

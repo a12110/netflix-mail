@@ -781,12 +781,49 @@ function cssEscapeAttribute(value) {
   return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 function resolveRuleBuilderDropZone(x, y) {
-  const hits = typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+  const hits = getRuleBuilderPointHits(x, y);
+  return resolveRuleBuilderDirectDropZone(hits) ||
+    resolveRuleBuilderNodeDropZone(hits, y) ||
+    resolveRuleBuilderGroupEndDropZone(hits, y);
+}
+function getRuleBuilderPointHits(x, y) {
+  return typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
+}
+function resolveRuleBuilderDirectDropZone(hits) {
   for (const hit of hits) {
     const zone = hit?.closest?.("[data-builder-drop-parent]");
     if (zone) return zone;
   }
   return null;
+}
+function resolveRuleBuilderNodeDropZone(hits, y) {
+  for (const hit of hits) {
+    const nodeElement = hit?.closest?.("#rule-builder-root [data-builder-node-id]");
+    const nodeId = nodeElement?.dataset?.builderNodeId;
+    const found = nodeId ? findRuleBuilderParent(state.ruleBuilder, nodeId) : null;
+    if (!found || !Array.isArray(found.parent.children)) continue;
+    const rect = nodeElement.getBoundingClientRect();
+    const index = found.index + (y > rect.top + rect.height / 2 ? 1 : 0);
+    const zone = findRuleBuilderDropZone(found.parent.id, index);
+    if (zone) return zone;
+  }
+  return null;
+}
+function resolveRuleBuilderGroupEndDropZone(hits, y) {
+  for (const hit of hits) {
+    const groupElement = hit?.closest?.("#rule-builder-root [data-builder-group]");
+    const groupId = groupElement?.dataset?.builderGroup;
+    const group = groupId ? findRuleBuilderNode(state.ruleBuilder, groupId) : null;
+    if (!group || (group.op !== "and" && group.op !== "or")) continue;
+    const rect = groupElement.getBoundingClientRect();
+    if (y < rect.top + rect.height * 0.45) continue;
+    const zone = findRuleBuilderDropZone(group.id, group.children.length);
+    if (zone) return zone;
+  }
+  return null;
+}
+function findRuleBuilderDropZone(parentId, index) {
+  return document.querySelector('[data-builder-drop-parent="' + cssEscapeAttribute(parentId) + '"][data-builder-drop-index="' + index + '"]');
 }
 function syncRuleBuilderActiveZone(zone) {
   if (state.ruleBuilderActiveDropZone === zone) return;
