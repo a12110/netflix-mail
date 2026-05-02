@@ -886,7 +886,7 @@ pre {
   position: fixed;
   top: 0;
   left: 0;
-  z-index: 9999;
+  z-index: 2147483647;
   width: min(560px, calc(100vw - 32px));
   padding: 14px 16px;
   border: 1px solid rgba(96, 165, 250, 0.78);

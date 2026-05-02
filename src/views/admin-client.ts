@@ -783,14 +783,19 @@ function syncRuleBuilderActiveZone(zone) {
 function createRuleBuilderGhost(sourceId, x, y, sourceElement) {
   const node = findRuleBuilderNode(state.ruleBuilder, sourceId);
   if (!node) return;
-  if (!ruleBuilderGhostEl) {
-    ruleBuilderGhostEl = document.createElement("div");
-    document.body.appendChild(ruleBuilderGhostEl);
-  }
+  ensureRuleBuilderGhostHost(sourceElement);
   ruleBuilderGhostEl.className = "rule-drag-ghost" + (sourceElement ? " rule-drag-ghost-card" : "");
   if (sourceElement) renderRuleBuilderGhostCard(sourceElement);
   else ruleBuilderGhostEl.innerHTML = '<div class="rule-drag-ghost-title">' + renderRuleNodeKind(node) + '<span>' + escapeText(ruleBuilderGhostTitle(node)) + '</span></div><div class="rule-drag-ghost-body">' + escapeText(ruleBuilderGhostBody(node)) + '</div>';
   updateRuleBuilderGhostPosition(x, y);
+}
+function ensureRuleBuilderGhostHost(sourceElement) {
+  const host = getRuleBuilderGhostHost(sourceElement);
+  if (!ruleBuilderGhostEl) ruleBuilderGhostEl = document.createElement("div");
+  if (ruleBuilderGhostEl.parentElement !== host) host.appendChild(ruleBuilderGhostEl);
+}
+function getRuleBuilderGhostHost(sourceElement) {
+  return sourceElement?.closest?.("#rule-dialog") || sourceElement?.closest?.("dialog") || document.body;
 }
 function renderRuleBuilderGhostCard(sourceElement) {
   const rect = sourceElement.getBoundingClientRect();

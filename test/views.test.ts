@@ -74,6 +74,11 @@ describe("view templates", () => {
     expect(rulesHtml).toContain("rule-drag-ghost");
     expect(rulesHtml).toContain("rule-drag-ghost-card");
     expect(rulesHtml).toContain("rule-drag-placeholder");
+    expect(rulesHtml).toContain("ensureRuleBuilderGhostHost");
+    expect(rulesHtml).toContain("getRuleBuilderGhostHost");
+    expect(rulesHtml).toContain('sourceElement?.closest?.("#rule-dialog")');
+    expect(rulesHtml).toContain("sourceElement?.closest?.(\"dialog\")");
+    expect(rulesHtml).not.toContain("document.body.appendChild(ruleBuilderGhostEl)");
     expect(rulesHtml).toContain("ruleBuilderDropTargetKey");
     expect(rulesHtml).toContain("renderRuleBuilderGhostCard");
     expect(rulesHtml).toContain("getRuleBuilderPlaceholderSize");
