@@ -8533,6 +8533,11 @@ pre {
   background: rgba(219, 234, 254, 0.48);
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.14);
 }
+.rule-node.rule-drag-placeholder {
+  outline: 1.5px dashed rgba(37, 99, 235, 0.58);
+  outline-offset: -2px;
+  background: rgba(219, 234, 254, 0.46);
+}
 .rule-builder-tree.is-pointer-dragging .rule-node.is-dragging-source > * {
   visibility: hidden;
 }
@@ -8699,6 +8704,12 @@ pre {
   border: 0;
   box-shadow: none;
 }
+.rule-node-condition-card.rule-drag-placeholder {
+  border: 1.5px dashed rgba(37, 99, 235, 0.58);
+  border-radius: 14px;
+  background: rgba(219, 234, 254, 0.42);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
 .rule-condition-card {
   border: 0;
   border-radius: 0;
@@ -8842,7 +8853,7 @@ pre {
   font-size: 0;
   font-weight: 800;
   place-items: center;
-  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
+  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), margin 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
 }
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::before,
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::after {
@@ -8894,6 +8905,7 @@ pre {
 }
 .rule-drop-zone.active {
   min-height: var(--rule-placeholder-height, 64px) !important;
+  margin: 4px 0 !important;
   border: 1.5px dashed #2563eb !important;
   background: rgba(219, 234, 254, 0.66) !important;
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.12), 0 12px 28px rgba(37, 99, 235, 0.1) !important;
@@ -9268,9 +9280,7 @@ const state = {
   ruleBuilderPointerId: null,
   ruleBuilderActiveDropZone: null,
   ruleBuilderDragOffset: null,
-  ruleBuilderLastLiveDropKey: null,
-  ruleBuilderLiveRendering: false,
-  ruleBuilderLayoutRects: null,
+  ruleBuilderDropTargetKey: null,
   ruleBuilderPlaceholderSize: null,
   ruleBuilderPendingPointer: null,
   ruleBuilderMoveFrame: 0,
@@ -9912,7 +9922,7 @@ function handleRuleBuilderPointerDown(event) {
   event.preventDefault();
   state.ruleBuilderDragging = handle.dataset.builderDragId;
   state.ruleBuilderPointerId = event.pointerId;
-  state.ruleBuilderLastLiveDropKey = null;
+  state.ruleBuilderDropTargetKey = null;
   ruleBuilderPointerHandle = handle;
   try { handle.setPointerCapture(event.pointerId); } catch (error) {}
   const root = optional("#rule-builder-root");
@@ -9920,10 +9930,10 @@ function handleRuleBuilderPointerDown(event) {
   const sourceNode = handle.closest("[data-builder-node-id]");
   state.ruleBuilderDragOffset = getRuleBuilderDragOffset(sourceNode, event.clientX, event.clientY);
   state.ruleBuilderPlaceholderSize = getRuleBuilderPlaceholderSize(sourceNode);
-  sourceNode?.classList.add("is-dragging-source");
+  sourceNode?.classList.add("is-dragging-source", "rule-drag-placeholder");
   createRuleBuilderGhost(state.ruleBuilderDragging, event.clientX, event.clientY, sourceNode);
   syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(event.clientX, event.clientY));
-  optional("#rule-message").textContent = "拖动中：将节点放到高亮区域完成移动";
+  optional("#rule-message").textContent = "拖动中：卡片将跟随指针移动，松开后完成排序";
 }
 function handleRuleBuilderPointerMove(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
@@ -9937,9 +9947,7 @@ function processRuleBuilderPointerMove() {
   const point = state.ruleBuilderPendingPointer;
   if (!point || !state.ruleBuilderDragging) return;
   updateRuleBuilderGhostPosition(point.x, point.y);
-  const zone = resolveRuleBuilderDropZone(point.x, point.y);
-  const moved = liveMoveRuleBuilderNode(zone, point.x, point.y);
-  if (!moved) syncRuleBuilderActiveZone(zone);
+  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(point.x, point.y));
 }
 function flushRuleBuilderPointerMove() {
   if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
@@ -9949,12 +9957,11 @@ function flushRuleBuilderPointerMove() {
 function handleRuleBuilderPointerUp(event) {
   if (!state.ruleBuilderDragging || event.pointerId !== state.ruleBuilderPointerId) return;
   flushRuleBuilderPointerMove();
-  const hadLiveMove = Boolean(state.ruleBuilderLastLiveDropKey);
   const zone = state.ruleBuilderActiveDropZone;
-  const moved = !hadLiveMove && zone
+  const moved = zone
     ? moveRuleBuilderNode(state.ruleBuilderDragging, zone.dataset.builderDropParent, Number(zone.dataset.builderDropIndex))
     : false;
-  optional("#rule-message").textContent = hadLiveMove ? "已完成拖拽排序" : moved ? "已移动节点" : zone ? "无法移动到该位置" : "已取消拖拽";
+  optional("#rule-message").textContent = moved ? "已完成拖拽排序" : zone ? "无法移动到该位置" : "已取消拖拽";
   clearRuleBuilderDropState();
 }
 function handleRuleBuilderPointerCancel(event) {
@@ -9962,67 +9969,9 @@ function handleRuleBuilderPointerCancel(event) {
   clearRuleBuilderDropState();
 }
 function handleRuleBuilderLostPointerCapture(event) {
-  if (!state.ruleBuilderDragging || state.ruleBuilderLiveRendering) return;
+  if (!state.ruleBuilderDragging) return;
   if (event.target !== ruleBuilderPointerHandle) return;
   clearRuleBuilderDropState();
-}
-function liveMoveRuleBuilderNode(zone, x, y) {
-  if (!zone || !state.ruleBuilderDragging) return false;
-  const parentId = zone.dataset.builderDropParent;
-  const targetIndex = Number(zone.dataset.builderDropIndex);
-  const key = parentId + ":" + targetIndex;
-  if (state.ruleBuilderLastLiveDropKey === key) return false;
-  state.ruleBuilderLayoutRects = captureRuleBuilderLayoutRects();
-  state.ruleBuilderLiveRendering = true;
-  let moved = false;
-  try {
-    moved = moveRuleBuilderNode(state.ruleBuilderDragging, parentId, targetIndex);
-  } finally {
-    state.ruleBuilderLiveRendering = false;
-  }
-  if (!moved) {
-    state.ruleBuilderLayoutRects = null;
-    return false;
-  }
-  state.ruleBuilderLastLiveDropKey = key;
-  restoreRuleBuilderLiveDragState(x, y);
-  animateRuleBuilderLayout();
-  optional("#rule-message").textContent = "拖动中：排序已实时更新，松开完成";
-  return true;
-}
-function restoreRuleBuilderLiveDragState(x, y) {
-  optional("#rule-builder-root")?.classList.add("is-pointer-dragging");
-  document.querySelector('[data-builder-node-id="' + cssEscapeAttribute(state.ruleBuilderDragging) + '"]')?.classList.add("is-dragging-source");
-  updateRuleBuilderGhostPosition(x, y);
-  syncRuleBuilderActiveZone(resolveRuleBuilderDropZone(x, y));
-}
-function captureRuleBuilderLayoutRects() {
-  const rects = new Map();
-  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => {
-    rects.set(node.dataset.builderNodeId, node.getBoundingClientRect());
-  });
-  return rects;
-}
-function animateRuleBuilderLayout() {
-  const rects = state.ruleBuilderLayoutRects;
-  state.ruleBuilderLayoutRects = null;
-  if (!rects) return;
-  document.querySelectorAll("#rule-builder-root [data-builder-node-id]").forEach((node) => animateRuleBuilderNodeShift(node, rects));
-}
-function animateRuleBuilderNodeShift(node, rects) {
-  const before = rects.get(node.dataset.builderNodeId);
-  if (!before || node.classList.contains("is-dragging-source")) return;
-  const after = node.getBoundingClientRect();
-  const deltaX = before.left - after.left;
-  const deltaY = before.top - after.top;
-  if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return;
-  node.style.transition = "none";
-  node.style.transform = "translate(" + deltaX + "px," + deltaY + "px)";
-  node.getBoundingClientRect();
-  requestAnimationFrame(() => {
-    node.style.transition = "transform 180ms cubic-bezier(0.2, 0, 0, 1), border-color 160ms ease, box-shadow 160ms ease, background 160ms ease, opacity 160ms ease";
-    node.style.transform = "";
-  });
 }
 function cssEscapeAttribute(value) {
   return String(value || "").replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -10072,13 +10021,18 @@ function resolveRuleBuilderGroupEndDropZone(hits, y) {
 function findRuleBuilderDropZone(parentId, index) {
   return document.querySelector('[data-builder-drop-parent="' + cssEscapeAttribute(parentId) + '"][data-builder-drop-index="' + index + '"]');
 }
+function ruleBuilderDropZoneKey(zone) {
+  return zone ? zone.dataset.builderDropParent + ":" + zone.dataset.builderDropIndex : null;
+}
 function syncRuleBuilderActiveZone(zone) {
-  if (state.ruleBuilderActiveDropZone === zone) return;
+  const key = ruleBuilderDropZoneKey(zone);
+  if (state.ruleBuilderActiveDropZone === zone && state.ruleBuilderDropTargetKey === key) return;
   if (state.ruleBuilderActiveDropZone) {
     state.ruleBuilderActiveDropZone.classList.remove("active");
     state.ruleBuilderActiveDropZone.style.removeProperty("--rule-placeholder-height");
   }
   state.ruleBuilderActiveDropZone = zone || null;
+  state.ruleBuilderDropTargetKey = key;
   if (state.ruleBuilderActiveDropZone) {
     state.ruleBuilderActiveDropZone.classList.add("active");
     const size = state.ruleBuilderPlaceholderSize;
@@ -10100,7 +10054,7 @@ function createRuleBuilderGhost(sourceId, x, y, sourceElement) {
 function renderRuleBuilderGhostCard(sourceElement) {
   const rect = sourceElement.getBoundingClientRect();
   const clone = sourceElement.cloneNode(true);
-  clone.classList.remove("is-dragging-source");
+  clone.classList.remove("is-dragging-source", "rule-drag-placeholder");
   clone.querySelectorAll("[id]").forEach((item) => item.removeAttribute("id"));
   clone.querySelectorAll("button, input, select, textarea").forEach((item) => item.setAttribute("tabindex", "-1"));
   ruleBuilderGhostEl.style.width = Math.min(rect.width, window.innerWidth - 32) + "px";
@@ -10137,15 +10091,13 @@ function clearRuleBuilderDropState() {
   state.ruleBuilderDragging = null;
   state.ruleBuilderPointerId = null;
   state.ruleBuilderDragOffset = null;
-  state.ruleBuilderLastLiveDropKey = null;
-  state.ruleBuilderLiveRendering = false;
-  state.ruleBuilderLayoutRects = null;
+  state.ruleBuilderDropTargetKey = null;
   state.ruleBuilderPlaceholderSize = null;
   state.ruleBuilderPendingPointer = null;
   if (state.ruleBuilderMoveFrame) cancelAnimationFrame(state.ruleBuilderMoveFrame);
   state.ruleBuilderMoveFrame = 0;
   syncRuleBuilderActiveZone(null);
-  document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source"));
+  document.querySelectorAll(".rule-node.is-dragging-source").forEach((node) => node.classList.remove("is-dragging-source", "rule-drag-placeholder"));
   optional("#rule-builder-root")?.classList.remove("is-pointer-dragging");
   if (ruleBuilderGhostEl) {
     ruleBuilderGhostEl.remove();

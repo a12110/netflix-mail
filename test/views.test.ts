@@ -72,6 +72,13 @@ describe("view templates", () => {
     expect(rulesHtml).toContain("resolveRuleBuilderNodeDropZone");
     expect(rulesHtml).toContain("findRuleBuilderDropZone");
     expect(rulesHtml).toContain("rule-drag-ghost");
+    expect(rulesHtml).toContain("rule-drag-ghost-card");
+    expect(rulesHtml).toContain("rule-drag-placeholder");
+    expect(rulesHtml).toContain("ruleBuilderDropTargetKey");
+    expect(rulesHtml).toContain("renderRuleBuilderGhostCard");
+    expect(rulesHtml).toContain("getRuleBuilderPlaceholderSize");
+    expect(rulesHtml).not.toContain("liveMoveRuleBuilderNode");
+    expect(rulesHtml).not.toContain("ruleBuilderLiveRendering");
     expect(rulesHtml).not.toContain("dragstart");
     expect(rulesHtml).not.toContain("dragover");
     expect(rulesHtml).not.toContain("dataTransfer");

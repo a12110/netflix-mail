@@ -505,6 +505,11 @@ pre {
   background: rgba(219, 234, 254, 0.48);
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.14);
 }
+.rule-node.rule-drag-placeholder {
+  outline: 1.5px dashed rgba(37, 99, 235, 0.58);
+  outline-offset: -2px;
+  background: rgba(219, 234, 254, 0.46);
+}
 .rule-builder-tree.is-pointer-dragging .rule-node.is-dragging-source > * {
   visibility: hidden;
 }
@@ -671,6 +676,12 @@ pre {
   border: 0;
   box-shadow: none;
 }
+.rule-node-condition-card.rule-drag-placeholder {
+  border: 1.5px dashed rgba(37, 99, 235, 0.58);
+  border-radius: 14px;
+  background: rgba(219, 234, 254, 0.42);
+  box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.1);
+}
 .rule-condition-card {
   border: 0;
   border-radius: 0;
@@ -814,7 +825,7 @@ pre {
   font-size: 0;
   font-weight: 800;
   place-items: center;
-  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
+  transition: min-height 160ms cubic-bezier(0.2, 0, 0, 1), margin 160ms cubic-bezier(0.2, 0, 0, 1), background 160ms ease, box-shadow 160ms ease;
 }
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::before,
 .rule-builder-tree.is-pointer-dragging .rule-drop-zone.active::after {
@@ -866,6 +877,7 @@ pre {
 }
 .rule-drop-zone.active {
   min-height: var(--rule-placeholder-height, 64px) !important;
+  margin: 4px 0 !important;
   border: 1.5px dashed #2563eb !important;
   background: rgba(219, 234, 254, 0.66) !important;
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.12), 0 12px 28px rgba(37, 99, 235, 0.1) !important;

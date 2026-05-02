@@ -76,7 +76,7 @@
 ### 关键设计方向
 - 保持项目现有浅色企业后台风格，不引入 React/Tailwind/外部依赖。
 - 使用卡片式规则树：组节点负责 AND/OR/NOT，条件节点负责 field/operator/value/caseSensitive。
-- 使用原生 HTML5 drag/drop，提供可点击按钮作为拖拽失败时的备用交互。
+- 初版使用原生 HTML5 drag/drop；后续规则页 UI 重写已升级为原生 DOM + Pointer Events，拖动时使用 ghost preview、placeholder 占位与 drop zone 高亮，复制、上移/下移、删除、重置继续作为非拖拽兜底。
 
 ### 阻塞项
 - 暂无。
@@ -139,3 +139,8 @@
 - [x] 将规则节点重构为“分组容器 + 条件卡片”两套 DOM 骨架
 - [x] 修正 drop zone 默认占位，改为拖拽时再显示
 - [x] 通过 `tsc --noEmit` 与 `vitest run` 验证
+
+## 2026-05-02 规则卡片拖拽排列体验升级
+- [x] 将拖动中实时改写规则树改为 ghost + placeholder 预览，松手后一次提交移动。
+- [x] 拖动时保留源位置占位，目标位置按卡片高度展开，其他卡片自动让位。
+- [x] 保留 Pointer Events、复制、上移/下移、删除与重置兜底，不改 API / DB / 规则 JSON 结构。
