@@ -8582,17 +8582,30 @@ pre {
   flex: 0 0 auto;
   margin-left: auto;
 }
+@media (max-width: 1310px){
+.rule-condition-actions {
+  padding-top: 0 !important;
+}
+}
 .rule-group-header-actions { flex-wrap: wrap; justify-content: flex-end; }
 .rule-condition-actions {
-  align-items: flex-end;
+  align-items: center;
+  align-self: center;
   gap: 6px;
-  padding-bottom: 3px;
+  min-height: 44px;
+  padding-bottom: 0;
   flex-wrap: nowrap;
+  justify-content: flex-end;
+  max-width: none;
+  padding-top: 23px;
 }
 .rule-condition-actions button {
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 8px;
+  min-height: 44px;
+  padding: 0 14px;
+  border-radius: 10px;
+  color: var(--primary);
+  border-color: #bfdbfe;
+  background: #fff;
   font-size: 12px;
   line-height: 1;
 }
@@ -8711,42 +8724,46 @@ pre {
   box-shadow: inset 0 0 0 2px rgba(37, 99, 235, 0.1);
 }
 .rule-condition-card {
-  border: 0;
-  border-radius: 0;
-  background: #fff;
-  padding: 0;
-  box-shadow: none;
+  width: 100%;
+  max-width: none;
+  margin-inline: 0;
+  border: 1px solid rgba(191, 219, 254, 0.86);
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,251,255,0.96));
+  padding: 10px 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.05);
 }
 .rule-condition-row {
   display: grid;
-  grid-template-columns: 32px minmax(0, 1fr) auto;
+  grid-template-columns: 36px minmax(0, 1fr) minmax(320px, max-content);
   gap: 10px;
-  align-items: end;
-  min-height: 62px;
+  align-items: center;
+  min-height: 72px;
 }
 .rule-condition-leading {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  padding-bottom: 3px;
+  align-self: center;
+  min-height: 44px;
 }
 .rule-drag-handle {
   cursor: grab;
-  min-height: 34px;
-  width: 28px;
+  min-height: 44px;
+  width: 34px;
   padding: 0;
   user-select: none;
   touch-action: none;
   color: #64748b;
-  border-color: transparent;
+  border: 0 !important;
   background: transparent;
+  box-shadow: none;
 }
 .rule-drag-handle:hover,
 .rule-drag-handle:focus-visible {
-  border-color: #bfdbfe;
   background: #eff6ff;
   color: #2563eb;
-  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.12);
+  box-shadow: none;
 }
 .rule-drag-handle:disabled { cursor: not-allowed; }
 .rule-drag-handle:active,
@@ -8755,8 +8772,8 @@ pre {
   will-change: transform;
 }
 .rule-grip {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 19px;
   display: inline-block;
   background-image: radial-gradient(currentColor 1.3px, transparent 1.3px);
   background-size: 6px 6px;
@@ -8765,19 +8782,23 @@ pre {
 }
 .rule-condition-fields {
   display: grid;
-  grid-template-columns: minmax(150px, 1.05fr) minmax(118px, 0.78fr) minmax(190px, 1fr) max-content;
+  grid-template-columns: minmax(168px, 0.88fr) minmax(132px, 0.7fr) minmax(280px, 1.45fr) minmax(132px, max-content);
   gap: 10px;
   align-items: end;
+  min-width: 0;
 }
 .rule-field-cell {
   display: grid;
+  grid-template-rows: 18px 44px;
   gap: 5px;
   margin: 0;
+  min-width: 0;
 }
-.rule-field-cell span {
-  display: block;
+.rule-field-label {
+  display: flex;
+  align-items: center;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.04em;
   line-height: 1.2;
@@ -8786,50 +8807,63 @@ pre {
   position: relative;
   display: flex;
   align-items: center;
+  min-height: 44px;
+  min-width: 0;
 }
-.rule-field-select-shell select { padding-left: 42px !important; }
+.rule-field-select-shell select { padding-left: 44px !important; }
 .rule-field-icon {
   position: absolute;
-  left: 10px;
+  left: 11px;
+  top: 50%;
   z-index: 1;
   display: inline-flex !important;
   align-items: center;
   justify-content: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 9px;
   color: #2563eb !important;
-  background: #eff6ff;
-  font-size: 12px !important;
-  font-weight: 900 !important;
-  letter-spacing: 0 !important;
+  background: linear-gradient(180deg, #eff6ff, #dbeafe);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   pointer-events: none;
+  transform: translateY(-50%);
 }
-.rule-field-icon-code { font-size: 18px !important; }
+.rule-field-icon svg {
+  display: block;
+  width: 17px;
+  height: 17px;
+  stroke: currentColor;
+}
 .rule-field-cell select,
 .rule-field-cell input {
   width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
-  border-color: #dbe7f6;
-  border-radius: 8px;
+  min-height: 44px;
+  padding: 9px 14px;
+  border-color: #bfdbfe;
+  border-radius: 10px;
   background-color: #fff;
   color: #1f2937;
   font-weight: 800;
   font-size: 13px;
+  line-height: 1.2;
 }
 .rule-field-checkbox { min-width: 104px; }
 .rule-case-toggle {
-  min-height: 34px;
+  min-height: 44px;
   width: 100%;
-  justify-content: flex-start;
+  align-items: center;
+  justify-content: center;
   margin: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
+  padding: 9px 14px;
+  border: 1px solid #bfdbfe;
+  background: #fff;
   color: var(--muted-strong);
   box-shadow: none;
   white-space: nowrap;
+}
+.rule-case-toggle:hover {
+  border-color: #bfdbfe;
+  background: #eff6ff;
 }
 .rule-case-toggle input {
   width: 16px !important;
@@ -9011,6 +9045,20 @@ pre {
 .visitor-count { font-size: 28px; font-weight: 850; color: var(--primary); }
 .mail-reader-page { width: min(1600px, calc(100vw - 32px)); }
 ${MAIL_STYLES}
+@media (max-width: 1310px) {
+  .rule-condition-row {
+    grid-template-columns: 36px minmax(0, 1fr);
+    align-items: start;
+  }
+  .rule-condition-actions {
+    grid-column: 2;
+    width: 100%;
+    margin-left: 0;
+    align-self: start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; padding: 18px; }
@@ -9025,7 +9073,7 @@ ${MAIL_STYLES}
   .rule-form-meta-grid,
   .rule-condition-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .rule-dialog-footer { display: grid; }
-  .rule-builder-topline { align-items: flex-start; }
+  .rule-builder-topline { align-items: flex-start; flex-wrap: wrap; }
   .rule-builder-summary { flex-basis: 100%; width: 100%; }
 }
 @media (max-width: 760px) {
@@ -9047,7 +9095,12 @@ ${MAIL_STYLES}
   .rule-builder-topline, .rule-form-meta-grid, .rule-dialog-submit, .rule-page-toolbar { display: grid; }
   .rule-condition-fields, .rule-grid { grid-template-columns: 1fr; }
   .rule-condition-row { grid-template-columns: 1fr; }
-  .rule-condition-leading { justify-content: flex-start; }
+  .rule-condition-leading,
+  .rule-condition-actions {
+    align-self: start;
+    justify-content: flex-start;
+  }
+  .rule-condition-actions { grid-column: 1; }
   .rule-node-children { padding-left: 12px; }
   .rule-group-header,
   .rule-group-header-main,
@@ -9802,16 +9855,16 @@ function renderRuleConditionCard(node, parentId, depth, index) {
   '</div>';
 }
 function renderRuleConditionFields(node) {
-  return '<label class="rule-field-cell"><span>字段</span><span class="rule-select-shell rule-field-select-shell"><span class="rule-field-icon rule-field-icon-' + escapeAttribute(node.field) + '">' + ruleFieldIcon(node.field) + '</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></span></label>' +
-    '<label class="rule-field-cell"><span>方式</span><span class="rule-select-shell"><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></span></label>' +
-    '<label class="rule-field-cell rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="' + escapeAttribute(ruleValuePlaceholder(node)) + '"></label>' +
-    '<div class="rule-field-cell rule-field-checkbox"><span>&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
+  return '<label class="rule-field-cell"><span class="rule-field-label">字段</span><span class="rule-select-shell rule-field-select-shell"><span class="rule-field-icon rule-field-icon-' + escapeAttribute(node.field) + '" aria-hidden="true">' + ruleFieldIcon(node.field) + '</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell"><span class="rule-field-label">方式</span><span class="rule-select-shell"><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell rule-value-cell"><span class="rule-field-label">值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="' + escapeAttribute(ruleValuePlaceholder(node)) + '"></label>' +
+    '<div class="rule-field-cell rule-field-checkbox"><span class="rule-field-label" aria-hidden="true">&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
 }
 function ruleFieldIcon(field) {
-  if (field === "from" || field === "to") return "✉";
-  if (field === "code") return "#";
-  if (field === "html") return "&lt;/&gt;";
-  return "T";
+  if (field === "from" || field === "to") return '<svg viewBox="0 0 20 20" focusable="false"><path d="M10 3.4a6.6 6.6 0 1 0 3.7 12.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13.4 7.2v3.2a2.9 2.9 0 1 1-.9-2.1v2.2c0 1.2.7 1.8 1.6 1.8.9 0 1.7-.7 1.7-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (field === "code") return '<svg viewBox="0 0 20 20" focusable="false"><path d="M7.2 4.6 5.7 15.4M14.3 4.6l-1.5 10.8M4.4 8.1h11.2M3.7 12h11.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  if (field === "html") return '<svg viewBox="0 0 20 20" focusable="false"><path d="m7.4 6.2-3.8 3.8 3.8 3.8M12.6 6.2l3.8 3.8-3.8 3.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return '<svg viewBox="0 0 20 20" focusable="false"><path d="M4.7 15.2 8.2 4.8h1.9l3.5 10.4M6.2 11.3h5.9M14.8 7.6h.1M14.9 15.2V9.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
 function ruleValuePlaceholder(node) {
   if (node.operator === "regex") return "输入正则表达式";

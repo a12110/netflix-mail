@@ -543,16 +543,16 @@ function renderRuleConditionCard(node, parentId, depth, index) {
   '</div>';
 }
 function renderRuleConditionFields(node) {
-  return '<label class="rule-field-cell"><span>字段</span><span class="rule-select-shell rule-field-select-shell"><span class="rule-field-icon rule-field-icon-' + escapeAttribute(node.field) + '">' + ruleFieldIcon(node.field) + '</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></span></label>' +
-    '<label class="rule-field-cell"><span>方式</span><span class="rule-select-shell"><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></span></label>' +
-    '<label class="rule-field-cell rule-value-cell"><span>值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="' + escapeAttribute(ruleValuePlaceholder(node)) + '"></label>' +
-    '<div class="rule-field-cell rule-field-checkbox"><span>&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
+  return '<label class="rule-field-cell"><span class="rule-field-label">字段</span><span class="rule-select-shell rule-field-select-shell"><span class="rule-field-icon rule-field-icon-' + escapeAttribute(node.field) + '" aria-hidden="true">' + ruleFieldIcon(node.field) + '</span><select data-builder-field="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_FIELD_OPTIONS, node.field, RULE_FIELD_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell"><span class="rule-field-label">方式</span><span class="rule-select-shell"><select data-builder-operator="' + escapeAttribute(node.id) + '">' + ruleOptions(RULE_OPERATOR_OPTIONS, node.operator, RULE_OPERATOR_LABELS) + '</select></span></label>' +
+    '<label class="rule-field-cell rule-value-cell"><span class="rule-field-label">值</span><input data-builder-value="' + escapeAttribute(node.id) + '" value="' + escapeAttribute(node.value || '') + '" placeholder="' + escapeAttribute(ruleValuePlaceholder(node)) + '"></label>' +
+    '<div class="rule-field-cell rule-field-checkbox"><span class="rule-field-label" aria-hidden="true">&nbsp;</span><label class="checkbox-pill rule-case-toggle"><input type="checkbox" data-builder-case="' + escapeAttribute(node.id) + '"' + (node.caseSensitive ? ' checked' : '') + '> 区分大小写</label></div>';
 }
 function ruleFieldIcon(field) {
-  if (field === "from" || field === "to") return "✉";
-  if (field === "code") return "#";
-  if (field === "html") return "&lt;/&gt;";
-  return "T";
+  if (field === "from" || field === "to") return '<svg viewBox="0 0 20 20" focusable="false"><path d="M10 3.4a6.6 6.6 0 1 0 3.7 12.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13.4 7.2v3.2a2.9 2.9 0 1 1-.9-2.1v2.2c0 1.2.7 1.8 1.6 1.8.9 0 1.7-.7 1.7-2.1" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  if (field === "code") return '<svg viewBox="0 0 20 20" focusable="false"><path d="M7.2 4.6 5.7 15.4M14.3 4.6l-1.5 10.8M4.4 8.1h11.2M3.7 12h11.2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  if (field === "html") return '<svg viewBox="0 0 20 20" focusable="false"><path d="m7.4 6.2-3.8 3.8 3.8 3.8M12.6 6.2l3.8 3.8-3.8 3.8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  return '<svg viewBox="0 0 20 20" focusable="false"><path d="M4.7 15.2 8.2 4.8h1.9l3.5 10.4M6.2 11.3h5.9M14.8 7.6h.1M14.9 15.2V9.4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 }
 function ruleValuePlaceholder(node) {
   if (node.operator === "regex") return "输入正则表达式";
