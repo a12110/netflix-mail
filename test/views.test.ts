@@ -53,7 +53,7 @@ describe("view templates", () => {
     expect(rulesHtml).toContain("rule-field-icon");
     expect(rulesHtml).toContain("rule-field-label");
     expect(rulesHtml).toContain("transform: translateY(-50%)");
-    expect(rulesHtml).toContain("@media (max-width: 1240px)");
+    expect(rulesHtml).toContain("@media (max-width: 1310px)");
     expect(rulesHtml).toContain(".rule-condition-actions {");
     expect(rulesHtml).toContain("grid-column: 2");
     expect(rulesHtml).toContain(".rule-builder-topline { align-items: flex-start; flex-wrap: wrap; }");
@@ -77,6 +77,8 @@ describe("view templates", () => {
     expect(rulesHtml).toContain("elementsFromPoint");
     expect(rulesHtml).toContain("resolveRuleBuilderNodeDropZone");
     expect(rulesHtml).toContain("findRuleBuilderDropZone");
+    expect(rulesHtml).toContain("resolveRuleBuilderPreviewDropZone");
+    expect(rulesHtml).toContain("resolveRuleBuilderMoveTarget");
     expect(rulesHtml).toContain("rule-drag-ghost");
     expect(rulesHtml).toContain("rule-drag-ghost-card");
     expect(rulesHtml).toContain("rule-drag-placeholder");

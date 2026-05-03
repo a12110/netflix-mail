@@ -10031,9 +10031,16 @@ function cssEscapeAttribute(value) {
 }
 function resolveRuleBuilderDropZone(x, y) {
   const hits = getRuleBuilderPointHits(x, y);
-  return resolveRuleBuilderDirectDropZone(hits) ||
-    resolveRuleBuilderNodeDropZone(hits, y) ||
-    resolveRuleBuilderGroupEndDropZone(hits, y);
+  return resolveRuleBuilderPreviewDropZone(resolveRuleBuilderDirectDropZone(hits)) ||
+    resolveRuleBuilderPreviewDropZone(resolveRuleBuilderNodeDropZone(hits, y)) ||
+    resolveRuleBuilderPreviewDropZone(resolveRuleBuilderGroupEndDropZone(hits, y));
+}
+function resolveRuleBuilderPreviewDropZone(zone) {
+  if (!zone) return null;
+  const sourceId = state.ruleBuilderDragging;
+  const parentId = zone.dataset.builderDropParent;
+  const index = Number(zone.dataset.builderDropIndex);
+  return canRuleBuilderMoveToDropZone(sourceId, parentId, index) ? zone : null;
 }
 function getRuleBuilderPointHits(x, y) {
   return typeof document.elementsFromPoint === "function" ? document.elementsFromPoint(x, y) : [document.elementFromPoint(x, y)];
@@ -10076,6 +10083,21 @@ function findRuleBuilderDropZone(parentId, index) {
 }
 function ruleBuilderDropZoneKey(zone) {
   return zone ? zone.dataset.builderDropParent + ":" + zone.dataset.builderDropIndex : null;
+}
+function canRuleBuilderMoveToDropZone(sourceId, parentId, index) {
+  return Boolean(resolveRuleBuilderMoveTarget(sourceId, parentId, index));
+}
+function resolveRuleBuilderMoveTarget(sourceId, parentId, index) {
+  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return null;
+  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
+  if (!parent || (parent.op !== "and" && parent.op !== "or")) return null;
+  const oldParent = findRuleBuilderParent(state.ruleBuilder, sourceId);
+  if (!oldParent || oldParent.parent.op === "not") return null;
+  let targetIndex = Number.isFinite(index) ? index : parent.children.length;
+  if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
+  const safeIndex = Math.max(0, Math.min(targetIndex, parent.children.length));
+  if (oldParent.parent.id === parent.id && oldParent.index === safeIndex) return null;
+  return { parent, index: safeIndex };
 }
 function syncRuleBuilderActiveZone(zone) {
   const key = ruleBuilderDropZoneKey(zone);
@@ -10202,21 +10224,12 @@ function moveRuleBuilderSibling(id, direction) {
   renderRuleBuilder();
 }
 function moveRuleBuilderNode(sourceId, parentId, index) {
-  if (!sourceId || !parentId || sourceId === state.ruleBuilder?.id || sourceId === parentId || isRuleBuilderDescendant(sourceId, parentId)) return false;
-  const parent = findRuleBuilderNode(state.ruleBuilder, parentId);
-  if (!parent || (parent.op !== "and" && parent.op !== "or")) return false;
-  const oldParent = findRuleBuilderParent(state.ruleBuilder, sourceId);
-  if (!oldParent || oldParent.parent.op === "not") return false;
-  let targetIndex = Number.isFinite(index) ? index : parent.children.length;
-  if (oldParent.parent.id === parent.id && oldParent.index < targetIndex) targetIndex -= 1;
-  const currentParent = parent;
-  const currentLength = currentParent.children.length;
-  const safeIndex = Math.max(0, Math.min(targetIndex, currentLength));
-  if (oldParent.parent.id === currentParent.id && oldParent.index === safeIndex) return false;
+  const target = resolveRuleBuilderMoveTarget(sourceId, parentId, index);
+  if (!target) return false;
   const detached = detachRuleBuilderNode(state.ruleBuilder, sourceId);
   if (!detached) return false;
-  const insertIndex = Math.max(0, Math.min(safeIndex, currentParent.children.length));
-  currentParent.children.splice(insertIndex, 0, detached);
+  const insertIndex = Math.max(0, Math.min(target.index, target.parent.children.length));
+  target.parent.children.splice(insertIndex, 0, detached);
   renderRuleBuilder();
   return true;
 }
