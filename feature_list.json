@@ -75,7 +75,7 @@
       "Send an unsupported provider value and verify the API returns 400 without changing the previous setting."
     ],
     "budget_minutes": 10,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "backend",

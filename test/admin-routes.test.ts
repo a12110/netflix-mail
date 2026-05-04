@@ -420,4 +420,78 @@ describe("authenticated admin CAPTCHA settings route", () => {
       secretParams: { secretKey: "[redacted]" }
     });
   });
+
+  it("validates advanced CAPTCHA providers and preserves settings after an unsupported provider", async () => {
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 0,
+        provider: "cloudflare_turnstile",
+        public_params_json: "{}",
+        secret_params_json: "{}"
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+    const session = await createCaptchaAdminSession(env);
+    const providers = [
+      {
+        provider: "tencent_cloud_captcha",
+        publicParams: { captchaAppId: "tencent-captcha-app-id", appId: "tencent-app-id" },
+        secretParams: { secretId: "tencent-secret-id", secretKey: "tencent-secret-key" },
+        redactedSecretParams: { secretId: "[redacted]", secretKey: "[redacted]" }
+      },
+      {
+        provider: "alibaba_cloud_captcha_2",
+        publicParams: { captchaId: "alibaba-captcha-id", sceneId: "alibaba-scene-id", prefix: "alibaba-prefix" },
+        secretParams: { accessKeyId: "alibaba-access-key-id", accessKeySecret: "alibaba-access-key-secret" },
+        redactedSecretParams: { accessKeyId: "[redacted]", accessKeySecret: "[redacted]" }
+      },
+      {
+        provider: "geetest_captcha",
+        publicParams: { captchaId: "geetest-captcha-id" },
+        secretParams: { captchaKey: "geetest-captcha-key" },
+        redactedSecretParams: { captchaKey: "[redacted]" }
+      }
+    ] as const;
+
+    for (const providerCase of providers) {
+      const update = await patchAdminCaptchaSettings(env, session, {
+        enabled: true,
+        provider: providerCase.provider,
+        publicParams: providerCase.publicParams,
+        secretParams: providerCase.secretParams
+      });
+      const read = await readAdminCaptchaSettings(env, session);
+
+      expect(update.response.status).toBe(200);
+      expect(update.parsed.captcha).toEqual({
+        enabled: true,
+        provider: providerCase.provider,
+        publicParams: providerCase.publicParams,
+        secretParams: providerCase.redactedSecretParams
+      });
+      expect(read.response.status).toBe(200);
+      expect(read.parsed.captcha).toEqual(update.parsed.captcha);
+      for (const secretValue of Object.values(providerCase.secretParams)) {
+        expect(update.text).not.toContain(secretValue);
+        expect(read.text).not.toContain(secretValue);
+      }
+    }
+
+    const rejected = await patchAdminCaptchaSettings(env, session, {
+      enabled: true,
+      provider: "unsupported_captcha",
+      publicParams: { siteKey: "unsupported-site-key" },
+      secretParams: { secretKey: "unsupported-secret-key" }
+    });
+    const afterRejected = await readAdminCaptchaSettings(env, session);
+
+    expect(rejected.response.status).toBe(400);
+    expect(afterRejected.response.status).toBe(200);
+    expect(afterRejected.parsed.captcha).toEqual({
+      enabled: true,
+      provider: "geetest_captcha",
+      publicParams: { captchaId: "geetest-captcha-id" },
+      secretParams: { captchaKey: "[redacted]" }
+    });
+  });
 });

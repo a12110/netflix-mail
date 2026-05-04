@@ -84,13 +84,16 @@ const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
 };
 
 const SECRET_PARAM_KEY_PATTERN = /secret|token|private|credential|keyid|accesskey|appsecret|captchaappsecret/i;
-const ENABLED_BASIC_CAPTCHA_PROVIDERS = new Set<CaptchaProvider>([
-  "cloudflare_turnstile",
-  "hcaptcha",
-  "google_recaptcha"
-]);
 const BROWSER_PUBLIC_KEY = "siteKey";
 const SERVER_SECRET_KEY = "secretKey";
+const REQUIRED_SECRET_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
+  cloudflare_turnstile: [SERVER_SECRET_KEY],
+  hcaptcha: [SERVER_SECRET_KEY],
+  google_recaptcha: [SERVER_SECRET_KEY],
+  tencent_cloud_captcha: ["secretId", SERVER_SECRET_KEY],
+  alibaba_cloud_captcha_2: ["accessKeyId", "accessKeySecret"],
+  geetest_captcha: ["captchaKey"]
+};
 
 export async function getAdminCaptchaSettings(db: D1Database): Promise<AdminCaptchaSettings> {
   const settings = await getLoginCaptchaSettings(db);
@@ -118,7 +121,7 @@ export async function updateAdminCaptchaSettings(
     return await getAdminCaptchaSettings(db);
   }
 
-  const validated = validateEnabledBasicProviderUpdate(update);
+  const validated = validateEnabledProviderUpdate(update);
   await db
     .prepare(
       `UPDATE login_captcha_settings
@@ -165,20 +168,24 @@ function redactSecretParams(params: Record<string, unknown>): Record<string, str
   return Object.fromEntries(Object.keys(params).map((key) => [key, "[redacted]"]));
 }
 
-function validateEnabledBasicProviderUpdate(update: AdminCaptchaSettingsUpdate): Required<AdminCaptchaSettingsUpdate> {
-  if (!update.provider || !ENABLED_BASIC_CAPTCHA_PROVIDERS.has(update.provider)) {
+function validateEnabledProviderUpdate(update: AdminCaptchaSettingsUpdate): Required<AdminCaptchaSettingsUpdate> {
+  if (!update.provider || !isCaptchaProvider(update.provider)) {
     throw new CaptchaSettingsValidationError("Unsupported CAPTCHA provider.");
   }
   const publicParams = requireParamRecord(update.publicParams, "publicParams");
   const secretParams = requireParamRecord(update.secretParams, "secretParams");
-  requireStringParam(publicParams, BROWSER_PUBLIC_KEY, "publicParams");
-  requireStringParam(secretParams, SERVER_SECRET_KEY, "secretParams");
+  requireStringParams(publicParams, PUBLIC_PARAM_KEYS[update.provider], "publicParams");
+  requireStringParams(secretParams, REQUIRED_SECRET_PARAM_KEYS[update.provider], "secretParams");
   return {
     enabled: true,
     provider: update.provider,
     publicParams,
     secretParams
   };
+}
+
+function isCaptchaProvider(value: string): value is CaptchaProvider {
+  return CAPTCHA_PROVIDERS.includes(value as CaptchaProvider);
 }
 
 function requireParamRecord(value: Record<string, unknown> | undefined, fieldName: string): Record<string, unknown> {
@@ -191,6 +198,12 @@ function requireParamRecord(value: Record<string, unknown> | undefined, fieldNam
 function requireStringParam(params: Record<string, unknown>, key: string, fieldName: string): void {
   if (typeof params[key] !== "string" || params[key].trim() === "") {
     throw new CaptchaSettingsValidationError(`${fieldName}.${key} is required.`);
+  }
+}
+
+function requireStringParams(params: Record<string, unknown>, keys: readonly string[], fieldName: string): void {
+  for (const key of keys) {
+    requireStringParam(params, key, fieldName);
   }
 }
 
