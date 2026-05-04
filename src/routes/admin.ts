@@ -10,6 +10,7 @@ import {
   sessionSetCookie,
   verifySessionValue
 } from "../services/auth";
+import { getPublicLoginCaptchaChallenge } from "../services/captcha-settings";
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
@@ -54,6 +55,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
     return c.json({ ok: true, hasAdmin: (await countAdmins(c.env.DB)) > 0 });
   });
   app.post("/api/setup/admin", createFirstAdmin);
+  app.get("/api/admin/login/captcha", publicLoginCaptchaChallenge);
   app.post("/api/admin/login", login);
   app.post("/api/admin/logout", async (c) => {
     c.header("Set-Cookie", sessionClearCookie());
@@ -100,6 +102,10 @@ async function createFirstAdmin(c: Context<AppEnv>): Promise<Response> {
   const id = await createAdmin(c.env.DB, username, password);
   await writeAccessLog(c.env.DB, { actorType: "system", actorId: id, action: "admin.created", request: c.req.raw });
   return c.json({ ok: true, id });
+}
+
+async function publicLoginCaptchaChallenge(c: Context<AppEnv>): Promise<Response> {
+  return c.json({ ok: true, captcha: await getPublicLoginCaptchaChallenge(c.env.DB) });
 }
 
 async function login(c: Context<AppEnv>): Promise<Response> {

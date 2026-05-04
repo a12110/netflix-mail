@@ -153,11 +153,46 @@ ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' C
 ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'));
 `;
 
+const LOGIN_CAPTCHA_SETTINGS_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS login_captcha_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  provider TEXT NOT NULL DEFAULT 'cloudflare_turnstile' CHECK (
+    provider IN (
+      'cloudflare_turnstile',
+      'hcaptcha',
+      'google_recaptcha',
+      'tencent_cloud_captcha',
+      'alibaba_cloud_captcha_2',
+      'geetest_captcha'
+    )
+  ),
+  public_params_json TEXT NOT NULL DEFAULT '{}',
+  secret_params_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+INSERT OR IGNORE INTO login_captcha_settings (
+  id,
+  enabled,
+  provider,
+  public_params_json,
+  secret_params_json
+) VALUES (
+  1,
+  0,
+  'cloudflare_turnstile',
+  '{}',
+  '{}'
+)`;
+
 export const DATABASE_MIGRATIONS: DatabaseMigration[] = [
   { id: "0001_initial", version: "v0.0.1", description: "初始化核心表、索引与访问日志", sql: INITIAL_SCHEMA_SQL },
   { id: "0002_share_link_token", version: "v0.0.2", description: "保存分享链接 token 以便后台重新复制", sql: SHARE_LINK_TOKEN_SQL },
   { id: "0003_rule_expressions", version: "v0.0.3", description: "支持规则白黑名单与高级表达式", sql: RULE_EXPRESSIONS_SQL },
-  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "支持分享链接允许/排除规则组合逻辑", sql: SHARE_LINK_RULE_LOGIC_SQL }
+  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "支持分享链接允许/排除规则组合逻辑", sql: SHARE_LINK_RULE_LOGIC_SQL },
+  { id: "0005_login_captcha_settings", version: "v0.0.5", description: "保存后台登录 CAPTCHA 默认关闭配置", sql: LOGIN_CAPTCHA_SETTINGS_SQL }
 ];
 
 const UNINITIALIZED_DATABASE_VERSION = "未初始化";
@@ -202,6 +237,9 @@ async function buildDatabaseResult(
 }
 
 async function currentVersionFromSchema(db: D1Database, migrations: DatabaseMigrationStatus[]): Promise<string> {
+  if (await tableExists(db, "login_captcha_settings")) {
+    return migrationVersion("0005_login_captcha_settings");
+  }
   if ((await columnExists(db, "share_links", "allow_rule_logic")) && (await columnExists(db, "share_links", "block_rule_logic"))) {
     return migrationVersion("0004_share_link_rule_logic");
   }

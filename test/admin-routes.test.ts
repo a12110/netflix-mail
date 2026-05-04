@@ -38,3 +38,78 @@ describe("admin setup routes", () => {
     expect(runCount()).toBe(0);
   });
 });
+
+
+type CaptchaRow = {
+  enabled: number;
+  provider: string;
+  public_params_json?: string | null;
+  provider_public_params_json?: string | null;
+  params_json?: string | null;
+  secret_params_json?: string | null;
+};
+
+function createCaptchaDb(row: CaptchaRow | null): D1Database {
+  return {
+    prepare(sql: string) {
+      const statement = {
+        bind: () => statement,
+        first: async () => {
+          if (sql.includes("sqlite_master")) {
+            return row === null ? null : { name: "login_captcha_settings" };
+          }
+          if (sql.includes("login_captcha_settings")) {
+            return row;
+          }
+          return null;
+        },
+        run: async () => ({ meta: { last_row_id: 1 } }),
+        all: async () => ({ results: [] })
+      };
+      return statement;
+    }
+  } as unknown as D1Database;
+}
+
+describe("public admin login CAPTCHA challenge route", () => {
+  it("returns disabled false from the default database state without an admin session", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/admin/login/captcha"),
+      { DB: createCaptchaDb({
+        enabled: 0,
+        provider: "cloudflare_turnstile",
+        public_params_json: "{}",
+        secret_params_json: "{}"
+      }) } as Env
+    );
+    const body = await response.json() as { ok: boolean; captcha: { enabled: boolean; provider?: string } };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({ ok: true, captcha: { enabled: false } });
+  });
+
+  it("returns only public provider fields when CAPTCHA is enabled", async () => {
+    const response = await worker.fetch(
+      new Request("http://localhost/api/admin/login/captcha"),
+      {
+        DB: createCaptchaDb({
+          enabled: 1,
+          provider: "cloudflare_turnstile",
+          public_params_json: JSON.stringify({ siteKey: "site-public", secretKey: "stored-secret" }),
+          secret_params_json: JSON.stringify({ secretKey: "stored-secret" })
+        })
+      } as Env
+    );
+    const text = await response.text();
+    const body = JSON.parse(text) as { captcha: { enabled: boolean; provider: string; publicParams: Record<string, unknown> } };
+
+    expect(response.status).toBe(200);
+    expect(body.captcha).toEqual({
+      enabled: true,
+      provider: "cloudflare_turnstile",
+      publicParams: { siteKey: "site-public" }
+    });
+    expect(text).not.toContain("stored-secret");
+    expect(text).not.toContain("secretKey");
+  });
+});

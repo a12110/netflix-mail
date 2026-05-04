@@ -1,0 +1,132 @@
+[
+  {
+    "task_type": "backend",
+    "description": "Persist a default-disabled login CAPTCHA setting in the database upgrade flow.",
+    "steps": [
+      "Add a database migration for one persisted CAPTCHA settings record with enabled set to false by default.",
+      "Store provider selection and provider parameters in a shape that can support Cloudflare Turnstile, hCaptcha, Google reCAPTCHA, Tencent Cloud CAPTCHA, Alibaba Cloud CAPTCHA 2.0, and GeeTest CAPTCHA.",
+      "Register the migration after the current latest migration without changing existing migration order.",
+      "Call the admin database status or upgrade API in tests and verify the required database version includes the new CAPTCHA migration.",
+      "Verify the upgraded database reads CAPTCHA as disabled when no admin has configured it."
+    ],
+    "budget_minutes": 8,
+    "passes": true
+  },
+  {
+    "task_type": "backend",
+    "description": "Expose the login page CAPTCHA challenge state without requiring an admin session.",
+    "steps": [
+      "Add a public read-only API response for the admin login page that reports whether CAPTCHA is enabled.",
+      "Return only the selected provider and browser-safe public parameters when CAPTCHA is enabled.",
+      "Ensure stored secret values are never present in the public response body.",
+      "Request the API with the default database state and verify it returns enabled false.",
+      "Request the API after a seeded enabled setting and verify it returns only the expected public provider fields."
+    ],
+    "budget_minutes": 8,
+    "passes": true
+  },
+  {
+    "task_type": "backend",
+    "description": "Let signed-in admins read CAPTCHA settings without exposing stored secrets.",
+    "steps": [
+      "Add an authenticated admin API that returns the current CAPTCHA enabled flag, provider, and saved public parameters.",
+      "Represent saved secret parameters with redacted markers or omit them from the response.",
+      "Request the API without a valid admin session and verify it returns 401.",
+      "Request the API with a valid admin session and verify the default response is disabled.",
+      "Seed an enabled provider setting and verify the admin read response does not expose raw secret values."
+    ],
+    "budget_minutes": 8,
+    "passes": false
+  },
+  {
+    "task_type": "backend",
+    "description": "Let signed-in admins save a disabled CAPTCHA configuration safely.",
+    "steps": [
+      "Add an authenticated admin update API that accepts enabled false without provider-specific parameters.",
+      "Persist the disabled state while preserving unrelated database data and existing admin sessions.",
+      "Send an authenticated update request with enabled false and verify the response reports CAPTCHA disabled.",
+      "Read the settings again through the admin API and verify the disabled state survives a second request.",
+      "Read the public login challenge API after disabling and verify it reports enabled false."
+    ],
+    "budget_minutes": 8,
+    "passes": false
+  },
+  {
+    "task_type": "backend",
+    "description": "Validate and persist Turnstile, hCaptcha, and reCAPTCHA settings.",
+    "steps": [
+      "Accept Cloudflare Turnstile, hCaptcha, and Google reCAPTCHA as explicit provider values in the admin update API.",
+      "Require the browser public key and server secret key fields when one of these providers is enabled.",
+      "Send a valid update request for each provider and verify the saved provider can be read back with secrets redacted.",
+      "Send an enabled update request with a missing required key and verify the API returns 400.",
+      "After the rejected request, read settings again and verify the previous persisted setting was not changed."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  },
+  {
+    "task_type": "backend",
+    "description": "Validate and persist Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA settings.",
+    "steps": [
+      "Accept Tencent Cloud CAPTCHA, Alibaba Cloud CAPTCHA 2.0, and GeeTest CAPTCHA as explicit provider values in the admin update API.",
+      "Require the provider-specific browser public parameters and server secret credentials when one of these providers is enabled.",
+      "Send a valid update request for Tencent Cloud CAPTCHA and verify the saved provider can be read back with secrets redacted.",
+      "Send a valid update request for Alibaba Cloud CAPTCHA 2.0 and GeeTest CAPTCHA and verify each saved provider can be read back with secrets redacted.",
+      "Send an unsupported provider value and verify the API returns 400 without changing the previous setting."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  },
+  {
+    "task_type": "backend",
+    "description": "Verify Turnstile, hCaptcha, and reCAPTCHA tokens before admin password authentication.",
+    "steps": [
+      "Add a provider verification path for Cloudflare Turnstile, hCaptcha, and Google reCAPTCHA using the configured server secret key.",
+      "Update the admin login API request contract to accept a CAPTCHA response token when CAPTCHA is enabled.",
+      "Post a login request with CAPTCHA enabled and no token and verify it fails before password authentication.",
+      "Mock each provider verification response and verify a successful CAPTCHA result allows the existing password login flow to continue.",
+      "Mock a failed verification response and verify the login API rejects the request without creating a session cookie."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  },
+  {
+    "task_type": "backend",
+    "description": "Verify Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA payloads before admin password authentication.",
+    "steps": [
+      "Add provider verification paths for Tencent Cloud CAPTCHA, Alibaba Cloud CAPTCHA 2.0, and GeeTest CAPTCHA using the saved server credentials.",
+      "Update the admin login API request contract to accept the provider-specific CAPTCHA payload fields required by these providers.",
+      "Post a login request with each provider enabled and a missing CAPTCHA payload and verify it fails before password authentication.",
+      "Mock successful provider verification responses and verify the existing password login flow still returns the admin session response.",
+      "Mock failed provider verification responses and verify the login API rejects the request without creating a session cookie."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  },
+  {
+    "task_type": "frontend",
+    "description": "Show an admin CAPTCHA settings page for choosing a provider and editing parameters.",
+    "steps": [
+      "Add an admin navigation entry and page route for CAPTCHA settings without changing existing admin page routes.",
+      "Render an enable switch, provider selector, and provider-specific parameter inputs for all six supported providers.",
+      "Load the current settings from the admin read API and save changes through the admin update API.",
+      "Open the settings page in a browser and verify the default disabled state is shown.",
+      "Switch between providers in the browser and verify only the selected provider parameter fields are visible."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  },
+  {
+    "task_type": "e2e",
+    "description": "Connect the admin login page to the configured CAPTCHA challenge flow.",
+    "steps": [
+      "Load the public CAPTCHA challenge API when the admin login screen is shown in the browser.",
+      "Verify the default disabled state keeps the login form visually unchanged and submits without CAPTCHA fields.",
+      "Seed an enabled provider setting and verify the login page renders a provider-specific challenge container or script hook before submit.",
+      "Submit a browser login attempt with a mocked CAPTCHA response and verify the login request includes the expected CAPTCHA payload.",
+      "Submit a browser login attempt without the CAPTCHA response while enabled and verify the UI shows the backend validation error."
+    ],
+    "budget_minutes": 10,
+    "passes": false
+  }
+]
