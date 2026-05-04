@@ -10,7 +10,7 @@ import {
   sessionSetCookie,
   verifySessionValue
 } from "../services/auth";
-import { getPublicLoginCaptchaChallenge } from "../services/captcha-settings";
+import { getAdminCaptchaSettings, getPublicLoginCaptchaChallenge } from "../services/captcha-settings";
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
@@ -62,6 +62,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
     return c.json({ ok: true });
   });
   app.get("/api/admin/me", async (c) => withAdmin(c, (admin) => c.json({ ok: true, admin: publicAdmin(admin) })));
+  app.get("/api/admin/captcha/settings", async (c) => withAdmin(c, () => adminCaptchaSettings(c)));
   app.get("/api/admin/emails", async (c) => withAdmin(c, () => adminListEmails(c)));
   app.get("/api/admin/emails/:id", async (c) => withAdmin(c, () => adminEmailDetail(c)));
   app.get("/api/admin/rules", async (c) => withAdmin(c, () => adminListRules(c)));
@@ -130,6 +131,10 @@ async function withAdmin(c: Context<AppEnv>, handler: (admin: AdminRow) => Promi
     return unauthorized(c);
   }
   return await handler(admin);
+}
+
+async function adminCaptchaSettings(c: Context<AppEnv>): Promise<Response> {
+  return c.json({ ok: true, captcha: await getAdminCaptchaSettings(c.env.DB) });
 }
 
 async function adminListEmails(c: Context<AppEnv>): Promise<Response> {

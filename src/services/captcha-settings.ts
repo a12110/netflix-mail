@@ -58,6 +58,13 @@ export interface PublicCaptchaChallenge {
   publicParams?: Record<string, unknown>;
 }
 
+export interface AdminCaptchaSettings {
+  enabled: boolean;
+  provider: CaptchaProvider;
+  publicParams: Record<string, unknown>;
+  secretParams: Record<string, string>;
+}
+
 const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: ["siteKey"],
   hcaptcha: ["siteKey"],
@@ -68,6 +75,16 @@ const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
 };
 
 const SECRET_PARAM_KEY_PATTERN = /secret|token|private|credential|keyid|accesskey|appsecret|captchaappsecret/i;
+
+export async function getAdminCaptchaSettings(db: D1Database): Promise<AdminCaptchaSettings> {
+  const settings = await getLoginCaptchaSettings(db);
+  return {
+    enabled: settings.enabled,
+    provider: settings.provider,
+    publicParams: settings.publicParams,
+    secretParams: redactSecretParams(settings.secretParams)
+  };
+}
 
 export async function getPublicLoginCaptchaChallenge(db: D1Database): Promise<PublicCaptchaChallenge> {
   if (!(await loginCaptchaSettingsTableExists(db))) {
@@ -94,6 +111,10 @@ async function loginCaptchaSettingsTableExists(db: D1Database): Promise<boolean>
     .bind("login_captcha_settings")
     .first<{ name: string }>();
   return Boolean(row);
+}
+
+function redactSecretParams(params: Record<string, unknown>): Record<string, string> {
+  return Object.fromEntries(Object.keys(params).map((key) => [key, "[redacted]"]));
 }
 
 function pickPublicParams(provider: CaptchaProvider, params: Record<string, unknown>): Record<string, unknown> {

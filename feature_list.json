@@ -36,7 +36,7 @@
       "Seed an enabled provider setting and verify the admin read response does not expose raw secret values."
     ],
     "budget_minutes": 8,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "backend",

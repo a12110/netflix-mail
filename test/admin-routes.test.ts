@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { SESSION_COOKIE } from "../src/constants";
 import worker from "../src/index";
-import type { Env } from "../src/types";
+import { createSessionValue } from "../src/services/auth";
+import type { AdminRow, Env } from "../src/types";
 
 function createSetupDb(count = 0): { db: D1Database; runCount: () => number } {
   let writes = 0;
@@ -111,5 +113,130 @@ describe("public admin login CAPTCHA challenge route", () => {
     });
     expect(text).not.toContain("stored-secret");
     expect(text).not.toContain("secretKey");
+  });
+});
+
+
+const CAPTCHA_ADMIN: AdminRow = {
+  id: 1,
+  username: "admin",
+  password_hash: "unused",
+  status: "active",
+  created_at: "2026-05-05T00:00:00.000Z",
+  last_login_at: null
+};
+
+function createAdminCaptchaDb(row: CaptchaRow): D1Database {
+  return {
+    prepare(sql: string) {
+      const statement = {
+        bind: () => statement,
+        first: async () => {
+          if (sql.includes("SELECT * FROM admins WHERE id")) {
+            return CAPTCHA_ADMIN;
+          }
+          if (sql.includes("login_captcha_settings")) {
+            return row;
+          }
+          return null;
+        },
+        run: async () => ({ meta: { last_row_id: 1 } }),
+        all: async () => ({ results: [] })
+      };
+      return statement;
+    }
+  } as unknown as D1Database;
+}
+
+async function createCaptchaAdminSession(env: Env): Promise<string> {
+  return await createSessionValue(env, CAPTCHA_ADMIN);
+}
+
+describe("authenticated admin CAPTCHA settings route", () => {
+  it("rejects requests without a valid admin session", async () => {
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 0,
+        provider: "cloudflare_turnstile",
+        public_params_json: "{}",
+        secret_params_json: "{}"
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+
+    const response = await worker.fetch(new Request("http://localhost/api/admin/captcha/settings"), env);
+    const body = await response.json() as { ok: boolean; error?: string };
+
+    expect(response.status).toBe(401);
+    expect(body.ok).toBe(false);
+  });
+
+  it("returns the default disabled CAPTCHA settings to a signed-in admin", async () => {
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 0,
+        provider: "cloudflare_turnstile",
+        public_params_json: "{}",
+        secret_params_json: "{}"
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+    const session = await createCaptchaAdminSession(env);
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/admin/captcha/settings", {
+        headers: { Cookie: `${SESSION_COOKIE}=${session}` }
+      }),
+      env
+    );
+    const body = await response.json() as {
+      ok: boolean;
+      captcha: { enabled: boolean; provider: string; publicParams: Record<string, unknown>; secretParams: Record<string, string> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body).toEqual({
+      ok: true,
+      captcha: {
+        enabled: false,
+        provider: "cloudflare_turnstile",
+        publicParams: {},
+        secretParams: {}
+      }
+    });
+  });
+
+  it("redacts saved secret parameters when returning enabled CAPTCHA settings", async () => {
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 1,
+        provider: "hcaptcha",
+        public_params_json: JSON.stringify({ siteKey: "site-public" }),
+        secret_params_json: JSON.stringify({ secretKey: "stored-secret", apiToken: "raw-token" })
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+    const session = await createCaptchaAdminSession(env);
+
+    const response = await worker.fetch(
+      new Request("http://localhost/api/admin/captcha/settings", {
+        headers: { Cookie: `${SESSION_COOKIE}=${session}` }
+      }),
+      env
+    );
+    const text = await response.text();
+    const body = JSON.parse(text) as {
+      captcha: { enabled: boolean; provider: string; publicParams: Record<string, unknown>; secretParams: Record<string, string> };
+    };
+
+    expect(response.status).toBe(200);
+    expect(body.captcha).toEqual({
+      enabled: true,
+      provider: "hcaptcha",
+      publicParams: { siteKey: "site-public" },
+      secretParams: { secretKey: "[redacted]", apiToken: "[redacted]" }
+    });
+    expect(text).not.toContain("stored-secret");
+    expect(text).not.toContain("raw-token");
   });
 });
