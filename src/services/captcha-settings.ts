@@ -20,7 +20,8 @@ export type CaptchaVerifierFetch = typeof fetch;
 
 export interface CaptchaVerificationInput {
   settings: LoginCaptchaSettings;
-  token: string;
+  token?: string;
+  payload?: Record<string, unknown>;
   fetcher?: CaptchaVerifierFetch;
 }
 
@@ -99,7 +100,22 @@ const SERVER_SECRET_KEY = "secretKey";
 const CAPTCHA_VERIFY_ENDPOINTS: Partial<Record<CaptchaProvider, string>> = {
   cloudflare_turnstile: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
   hcaptcha: "https://api.hcaptcha.com/siteverify",
-  google_recaptcha: "https://www.google.com/recaptcha/api/siteverify"
+  google_recaptcha: "https://www.google.com/recaptcha/api/siteverify",
+  tencent_cloud_captcha: "https://captcha.tencentcloudapi.com/",
+  alibaba_cloud_captcha_2: "https://captcha.aliyuncs.com/verify",
+  geetest_captcha: "https://gcaptcha4.geetest.com/validate"
+};
+
+const BASIC_CAPTCHA_PROVIDERS = [
+  "cloudflare_turnstile",
+  "hcaptcha",
+  "google_recaptcha"
+] as const;
+
+const CAPTCHA_PAYLOAD_KEYS: Partial<Record<CaptchaProvider, readonly string[]>> = {
+  tencent_cloud_captcha: ["ticket", "randstr"],
+  alibaba_cloud_captcha_2: ["captchaVerifyParam"],
+  geetest_captcha: ["captchaOutput", "lotNumber", "passToken", "genTime"]
 };
 const REQUIRED_SECRET_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: [SERVER_SECRET_KEY],
@@ -180,12 +196,8 @@ export async function verifyLoginCaptchaToken(input: CaptchaVerificationInput): 
   if (!endpoint) {
     throw new CaptchaVerificationError("CAPTCHA verification is not supported for this provider.");
   }
-  const secretKey = getRequiredString(input.settings.secretParams, SERVER_SECRET_KEY, "secretParams");
-  const response = await (input.fetcher ?? fetch)(endpoint, {
-    method: "POST",
-    body: buildVerificationBody(secretKey, input.token),
-    headers: { "content-type": "application/x-www-form-urlencoded" }
-  });
+  const request = buildProviderVerificationRequest(input, endpoint);
+  const response = await (input.fetcher ?? fetch)(endpoint, request);
   if (!response.ok) {
     return false;
   }
@@ -196,11 +208,95 @@ function disabledChallenge(): PublicCaptchaChallenge {
   return { enabled: false };
 }
 
-function buildVerificationBody(secretKey: string, token: string): URLSearchParams {
+function buildProviderVerificationRequest(input: CaptchaVerificationInput, endpoint: string): RequestInit {
+  if (isBasicCaptchaProvider(input.settings.provider)) {
+    return buildBasicVerificationRequest(input);
+  }
+  const payload = requireCaptchaPayload(input.settings.provider, input.payload);
+  if (input.settings.provider === "tencent_cloud_captcha") {
+    return buildTencentVerificationRequest(input.settings, payload);
+  }
+  if (input.settings.provider === "alibaba_cloud_captcha_2") {
+    return buildAlibabaVerificationRequest(input.settings, payload);
+  }
+  return buildGeetestVerificationRequest(input.settings, payload);
+}
+
+function buildBasicVerificationRequest(input: CaptchaVerificationInput): RequestInit {
+  const token = typeof input.token === "string" ? input.token.trim() : "";
+  if (!token) {
+    throw new CaptchaVerificationError("CAPTCHA token is required.");
+  }
+  const secretKey = getRequiredString(input.settings.secretParams, SERVER_SECRET_KEY, "secretParams");
+  return {
+    method: "POST",
+    body: buildBasicVerificationBody(secretKey, token),
+    headers: { "content-type": "application/x-www-form-urlencoded" }
+  };
+}
+
+function buildBasicVerificationBody(secretKey: string, token: string): URLSearchParams {
   const body = new URLSearchParams();
   body.set("secret", secretKey);
   body.set("response", token);
   return body;
+}
+
+function buildTencentVerificationRequest(settings: LoginCaptchaSettings, payload: Record<string, unknown>): RequestInit {
+  const secretId = getRequiredString(settings.secretParams, "secretId", "secretParams");
+  return jsonVerificationRequest({
+    secretId,
+    secretKey: getRequiredString(settings.secretParams, SERVER_SECRET_KEY, "secretParams"),
+    captchaAppId: getRequiredString(settings.publicParams, "captchaAppId", "publicParams"),
+    appId: getRequiredString(settings.publicParams, "appId", "publicParams"),
+    ticket: getRequiredString(payload, "ticket", "captchaPayload"),
+    randstr: getRequiredString(payload, "randstr", "captchaPayload")
+  }, { "x-tc-secret-id": secretId });
+}
+
+function buildAlibabaVerificationRequest(settings: LoginCaptchaSettings, payload: Record<string, unknown>): RequestInit {
+  const accessKeyId = getRequiredString(settings.secretParams, "accessKeyId", "secretParams");
+  return jsonVerificationRequest({
+    accessKeyId,
+    accessKeySecret: getRequiredString(settings.secretParams, "accessKeySecret", "secretParams"),
+    captchaId: getRequiredString(settings.publicParams, "captchaId", "publicParams"),
+    sceneId: getRequiredString(settings.publicParams, "sceneId", "publicParams"),
+    prefix: getRequiredString(settings.publicParams, "prefix", "publicParams"),
+    captchaVerifyParam: getRequiredString(payload, "captchaVerifyParam", "captchaPayload")
+  }, { "x-acs-access-key-id": accessKeyId });
+}
+
+function buildGeetestVerificationRequest(settings: LoginCaptchaSettings, payload: Record<string, unknown>): RequestInit {
+  return jsonVerificationRequest({
+    captchaId: getRequiredString(settings.publicParams, "captchaId", "publicParams"),
+    captchaKey: getRequiredString(settings.secretParams, "captchaKey", "secretParams"),
+    captchaOutput: getRequiredString(payload, "captchaOutput", "captchaPayload"),
+    lotNumber: getRequiredString(payload, "lotNumber", "captchaPayload"),
+    passToken: getRequiredString(payload, "passToken", "captchaPayload"),
+    genTime: getRequiredString(payload, "genTime", "captchaPayload")
+  });
+}
+
+function jsonVerificationRequest(value: Record<string, string>, headers: Record<string, string> = {}): RequestInit {
+  return {
+    method: "POST",
+    body: JSON.stringify(value),
+    headers: { "content-type": "application/json", ...headers }
+  };
+}
+
+function requireCaptchaPayload(provider: CaptchaProvider, value: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CaptchaVerificationError("captchaPayload is required.");
+  }
+  for (const key of CAPTCHA_PAYLOAD_KEYS[provider] ?? []) {
+    getRequiredString(value, key, "captchaPayload");
+  }
+  return value;
+}
+
+function isBasicCaptchaProvider(provider: CaptchaProvider): boolean {
+  return BASIC_CAPTCHA_PROVIDERS.includes(provider as (typeof BASIC_CAPTCHA_PROVIDERS)[number]);
 }
 
 function getRequiredString(params: Record<string, unknown>, key: string, fieldName: string): string {
@@ -215,7 +311,20 @@ function parseVerificationSuccess(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  return (value as { success?: unknown }).success === true;
+  const result = value as { success?: unknown; result?: unknown; status?: unknown; CaptchaCode?: unknown; Response?: unknown };
+  return result.success === true
+    || result.result === true
+    || result.result === "success"
+    || result.status === "success"
+    || result.CaptchaCode === 1
+    || parseNestedTencentSuccess(result.Response);
+}
+
+function parseNestedTencentSuccess(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return (value as { CaptchaCode?: unknown }).CaptchaCode === 1;
 }
 
 async function loginCaptchaSettingsTableExists(db: D1Database): Promise<boolean> {

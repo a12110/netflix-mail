@@ -1,18 +1,19 @@
 # Agent State
 
 ## Current Phase
-- Turnstile, hCaptcha, and reCAPTCHA token verification before admin password authentication completed; next `$Auto_dev` worker should continue with Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA payload verification before admin password authentication.
+- Tencent Cloud, Alibaba Cloud CAPTCHA 2.0, and GeeTest login CAPTCHA payload verification completed; next `$Auto_dev` worker should continue with the admin CAPTCHA settings UI task.
 
 ## First Pending Task
-- Verify Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA payloads before admin password authentication.
+- Show an admin CAPTCHA settings page for choosing a provider and editing parameters.
 
 ## Recommended Next Reads
 - `AGENTS.md`
 - `feature_list.json`
-- `src/services/captcha-settings.ts`
+- `src/views/admin.ts`
+- `src/views/admin-client.ts`
+- `src/routes/pages.ts`
 - `src/routes/admin.ts`
-- `test/admin-routes.test.ts`
-- `test/database-captcha.test.ts` if storage behavior needs confirmation
+- `test/views.test.ts`
 
 ## Active Blockers
 - None.
@@ -22,10 +23,10 @@
 - Authenticated admin CAPTCHA settings read API is available at `GET /api/admin/captcha/settings` and requires a valid `nm_session` admin cookie.
 - Authenticated admin CAPTCHA settings update API is available at `PATCH /api/admin/captcha/settings`.
 - The update API supports disabling with `{ "enabled": false }` while preserving stored provider params.
-- The update API now supports enabled settings for `cloudflare_turnstile`, `hcaptcha`, and `google_recaptcha` using `publicParams.siteKey` plus `secretParams.secretKey`.
-- The update API now supports enabled settings for `tencent_cloud_captcha`, `alibaba_cloud_captcha_2`, and `geetest_captcha` using provider-specific public params plus redacted server credentials on read.
-- Admin login accepts `captchaToken` when CAPTCHA is enabled.
-- Admin login now verifies `cloudflare_turnstile`, `hcaptcha`, and `google_recaptcha` tokens with the stored `secretParams.secretKey` before password authentication.
+- The update API supports enabled settings for all six providers, with provider-specific public params and secret credentials redacted on read.
+- Admin login accepts `captchaToken` for Turnstile, hCaptcha, and reCAPTCHA when CAPTCHA is enabled.
+- Admin login accepts provider-specific `captchaPayload` for Tencent Cloud CAPTCHA, Alibaba Cloud CAPTCHA 2.0, and GeeTest CAPTCHA when CAPTCHA is enabled.
+- Login CAPTCHA verification runs before password authentication; missing or failed CAPTCHA does not create a session cookie.
 - Admin CAPTCHA settings responses include `enabled`, `provider`, `publicParams`, and redacted `secretParams`; raw stored secrets must not appear in public or admin read responses.
 - Database migration `0005_login_captcha_settings` creates a singleton `login_captcha_settings` row with `enabled = 0` by default.
 - CAPTCHA provider storage uses a provider enum plus `public_params_json` and `secret_params_json` for all six planned providers.

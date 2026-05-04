@@ -101,7 +101,7 @@
       "Mock failed provider verification responses and verify the login API rejects the request without creating a session cookie."
     ],
     "budget_minutes": 10,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "frontend",

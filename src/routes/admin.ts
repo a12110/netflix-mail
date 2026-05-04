@@ -44,6 +44,7 @@ interface LoginBody {
   username?: string;
   password?: string;
   captchaToken?: string;
+  captchaPayload?: unknown;
 }
 
 interface SetupBody extends LoginBody {
@@ -151,12 +152,12 @@ async function verifyLoginCaptcha(c: Context<AppEnv>, body: LoginBody): Promise<
   if (!settings) {
     return null;
   }
-  const token = typeof body.captchaToken === "string" ? body.captchaToken.trim() : "";
-  if (!token) {
-    return badRequest(c, "CAPTCHA token is required.");
-  }
   try {
-    const verified = await verifyLoginCaptchaToken({ settings, token });
+    const verified = await verifyLoginCaptchaToken({
+      settings,
+      token: body.captchaToken,
+      payload: recordBodyField(body.captchaPayload)
+    });
     return verified ? null : unauthorized(c, "CAPTCHA verification failed.");
   } catch (error) {
     if (error instanceof CaptchaVerificationError) {
