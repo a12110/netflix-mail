@@ -11,6 +11,8 @@ import {
   verifySessionValue
 } from "../services/auth";
 import {
+  CaptchaSettingsValidationError,
+  type CaptchaProvider,
   getAdminCaptchaSettings,
   getPublicLoginCaptchaChallenge,
   updateAdminCaptchaSettings
@@ -46,6 +48,9 @@ interface SetupBody extends LoginBody {
 
 interface CaptchaSettingsUpdateBody {
   enabled?: unknown;
+  provider?: unknown;
+  publicParams?: unknown;
+  secretParams?: unknown;
 }
 
 interface ShareLinkBody {
@@ -148,10 +153,33 @@ async function adminCaptchaSettings(c: Context<AppEnv>): Promise<Response> {
 
 async function adminUpdateCaptchaSettings(c: Context<AppEnv>): Promise<Response> {
   const body = await readJson<CaptchaSettingsUpdateBody>(c);
-  if (body?.enabled !== false) {
-    return badRequest(c, "enabled false is required.");
+  if (body?.enabled === false) {
+    return c.json({ ok: true, captcha: await updateAdminCaptchaSettings(c.env.DB, { enabled: false }) });
   }
-  return c.json({ ok: true, captcha: await updateAdminCaptchaSettings(c.env.DB, { enabled: false }) });
+  if (body?.enabled !== true) {
+    return badRequest(c, "enabled boolean is required.");
+  }
+  try {
+    const captcha = await updateAdminCaptchaSettings(c.env.DB, {
+      enabled: true,
+      provider: typeof body.provider === "string" ? body.provider as CaptchaProvider : undefined,
+      publicParams: recordBodyField(body.publicParams),
+      secretParams: recordBodyField(body.secretParams)
+    });
+    return c.json({ ok: true, captcha });
+  } catch (error) {
+    if (error instanceof CaptchaSettingsValidationError) {
+      return badRequest(c, error.message);
+    }
+    throw error;
+  }
+}
+
+function recordBodyField(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
 }
 
 async function adminListEmails(c: Context<AppEnv>): Promise<Response> {

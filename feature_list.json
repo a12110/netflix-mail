@@ -62,7 +62,7 @@
       "After the rejected request, read settings again and verify the previous persisted setting was not changed."
     ],
     "budget_minutes": 10,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "backend",

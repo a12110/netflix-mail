@@ -129,8 +129,12 @@ const CAPTCHA_ADMIN: AdminRow = {
 function createAdminCaptchaDb(row: CaptchaRow): D1Database {
   return {
     prepare(sql: string) {
+      let values: unknown[] = [];
       const statement = {
-        bind: () => statement,
+        bind: (...newValues: unknown[]) => {
+          values = newValues;
+          return statement;
+        },
         first: async () => {
           if (sql.includes("sqlite_master")) {
             return { name: "login_captcha_settings" };
@@ -145,7 +149,14 @@ function createAdminCaptchaDb(row: CaptchaRow): D1Database {
         },
         run: async () => {
           if (sql.includes("UPDATE login_captcha_settings")) {
-            row.enabled = 0;
+            if (sql.includes("SET enabled = 0")) {
+              row.enabled = 0;
+            } else {
+              row.enabled = 1;
+              row.provider = String(values[0]);
+              row.public_params_json = String(values[1]);
+              row.secret_params_json = String(values[2]);
+            }
           }
           return { meta: { last_row_id: 1 } };
         },
@@ -158,6 +169,50 @@ function createAdminCaptchaDb(row: CaptchaRow): D1Database {
 
 async function createCaptchaAdminSession(env: Env): Promise<string> {
   return await createSessionValue(env, CAPTCHA_ADMIN);
+}
+
+type AdminCaptchaSettingsBody = {
+  captcha: {
+    enabled: boolean;
+    provider: string;
+    publicParams: Record<string, unknown>;
+    secretParams: Record<string, string>;
+  };
+};
+
+async function patchAdminCaptchaSettings(
+  env: Env,
+  session: string,
+  body: Record<string, unknown>
+): Promise<{ response: Response; text: string; parsed: AdminCaptchaSettingsBody }> {
+  const response = await worker.fetch(
+    new Request("http://localhost/api/admin/captcha/settings", {
+      method: "PATCH",
+      headers: captchaAdminHeaders(session),
+      body: JSON.stringify(body)
+    }),
+    env
+  );
+  const text = await response.text();
+  return { response, text, parsed: JSON.parse(text) as AdminCaptchaSettingsBody };
+}
+
+async function readAdminCaptchaSettings(env: Env, session: string): Promise<{ response: Response; text: string; parsed: AdminCaptchaSettingsBody }> {
+  const response = await worker.fetch(
+    new Request("http://localhost/api/admin/captcha/settings", {
+      headers: { Cookie: `${SESSION_COOKIE}=${session}` }
+    }),
+    env
+  );
+  const text = await response.text();
+  return { response, text, parsed: JSON.parse(text) as AdminCaptchaSettingsBody };
+}
+
+function captchaAdminHeaders(session: string): Record<string, string> {
+  return {
+    Cookie: `${SESSION_COOKIE}=${session}`,
+    "content-type": "application/json"
+  };
 }
 
 describe("authenticated admin CAPTCHA settings route", () => {
@@ -307,5 +362,62 @@ describe("authenticated admin CAPTCHA settings route", () => {
     expect(unrelatedData).toEqual({ adminSessionShouldRemainValid: true, unrelatedRows: 3 });
     expect(publicResponse.status).toBe(200);
     expect(publicBody.captcha).toEqual({ enabled: false });
+  });
+
+  it("validates and persists Turnstile, hCaptcha, and reCAPTCHA settings", async () => {
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 0,
+        provider: "cloudflare_turnstile",
+        public_params_json: "{}",
+        secret_params_json: "{}"
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+    const session = await createCaptchaAdminSession(env);
+    const providers = [
+      ["cloudflare_turnstile", "turnstile-site-key", "turnstile-secret-key"],
+      ["hcaptcha", "hcaptcha-site-key", "hcaptcha-secret-key"],
+      ["google_recaptcha", "recaptcha-site-key", "recaptcha-secret-key"]
+    ] as const;
+
+    for (const [provider, siteKey, secretKey] of providers) {
+      const update = await patchAdminCaptchaSettings(env, session, {
+        enabled: true,
+        provider,
+        publicParams: { siteKey },
+        secretParams: { secretKey }
+      });
+      const read = await readAdminCaptchaSettings(env, session);
+
+      expect(update.response.status).toBe(200);
+      expect(update.parsed.captcha).toEqual({
+        enabled: true,
+        provider,
+        publicParams: { siteKey },
+        secretParams: { secretKey: "[redacted]" }
+      });
+      expect(read.response.status).toBe(200);
+      expect(read.parsed.captcha).toEqual(update.parsed.captcha);
+      expect(update.text).not.toContain(secretKey);
+      expect(read.text).not.toContain(secretKey);
+    }
+
+    const rejected = await patchAdminCaptchaSettings(env, session, {
+      enabled: true,
+      provider: "cloudflare_turnstile",
+      publicParams: {},
+      secretParams: { secretKey: "should-not-save" }
+    });
+    const afterRejected = await readAdminCaptchaSettings(env, session);
+
+    expect(rejected.response.status).toBe(400);
+    expect(afterRejected.response.status).toBe(200);
+    expect(afterRejected.parsed.captcha).toEqual({
+      enabled: true,
+      provider: "google_recaptcha",
+      publicParams: { siteKey: "recaptcha-site-key" },
+      secretParams: { secretKey: "[redacted]" }
+    });
   });
 });

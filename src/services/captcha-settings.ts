@@ -67,7 +67,12 @@ export interface AdminCaptchaSettings {
 
 export interface AdminCaptchaSettingsUpdate {
   enabled: boolean;
+  provider?: CaptchaProvider;
+  publicParams?: Record<string, unknown>;
+  secretParams?: Record<string, unknown>;
 }
+
+export class CaptchaSettingsValidationError extends Error {}
 
 const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: ["siteKey"],
@@ -79,6 +84,13 @@ const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
 };
 
 const SECRET_PARAM_KEY_PATTERN = /secret|token|private|credential|keyid|accesskey|appsecret|captchaappsecret/i;
+const ENABLED_BASIC_CAPTCHA_PROVIDERS = new Set<CaptchaProvider>([
+  "cloudflare_turnstile",
+  "hcaptcha",
+  "google_recaptcha"
+]);
+const BROWSER_PUBLIC_KEY = "siteKey";
+const SERVER_SECRET_KEY = "secretKey";
 
 export async function getAdminCaptchaSettings(db: D1Database): Promise<AdminCaptchaSettings> {
   const settings = await getLoginCaptchaSettings(db);
@@ -94,16 +106,30 @@ export async function updateAdminCaptchaSettings(
   db: D1Database,
   update: AdminCaptchaSettingsUpdate
 ): Promise<AdminCaptchaSettings> {
-  if (update.enabled) {
-    throw new Error("Enabled CAPTCHA settings are not supported yet.");
+  if (!update.enabled) {
+    await db
+      .prepare(
+        `UPDATE login_captcha_settings
+         SET enabled = 0,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = 1`
+      )
+      .run();
+    return await getAdminCaptchaSettings(db);
   }
+
+  const validated = validateEnabledBasicProviderUpdate(update);
   await db
     .prepare(
       `UPDATE login_captcha_settings
-       SET enabled = 0,
+       SET enabled = 1,
+           provider = ?1,
+           public_params_json = ?2,
+           secret_params_json = ?3,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
        WHERE id = 1`
     )
+    .bind(validated.provider, JSON.stringify(validated.publicParams), JSON.stringify(validated.secretParams))
     .run();
   return await getAdminCaptchaSettings(db);
 }
@@ -137,6 +163,35 @@ async function loginCaptchaSettingsTableExists(db: D1Database): Promise<boolean>
 
 function redactSecretParams(params: Record<string, unknown>): Record<string, string> {
   return Object.fromEntries(Object.keys(params).map((key) => [key, "[redacted]"]));
+}
+
+function validateEnabledBasicProviderUpdate(update: AdminCaptchaSettingsUpdate): Required<AdminCaptchaSettingsUpdate> {
+  if (!update.provider || !ENABLED_BASIC_CAPTCHA_PROVIDERS.has(update.provider)) {
+    throw new CaptchaSettingsValidationError("Unsupported CAPTCHA provider.");
+  }
+  const publicParams = requireParamRecord(update.publicParams, "publicParams");
+  const secretParams = requireParamRecord(update.secretParams, "secretParams");
+  requireStringParam(publicParams, BROWSER_PUBLIC_KEY, "publicParams");
+  requireStringParam(secretParams, SERVER_SECRET_KEY, "secretParams");
+  return {
+    enabled: true,
+    provider: update.provider,
+    publicParams,
+    secretParams
+  };
+}
+
+function requireParamRecord(value: Record<string, unknown> | undefined, fieldName: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CaptchaSettingsValidationError(`${fieldName} is required.`);
+  }
+  return value;
+}
+
+function requireStringParam(params: Record<string, unknown>, key: string, fieldName: string): void {
+  if (typeof params[key] !== "string" || params[key].trim() === "") {
+    throw new CaptchaSettingsValidationError(`${fieldName}.${key} is required.`);
+  }
 }
 
 function pickPublicParams(provider: CaptchaProvider, params: Record<string, unknown>): Record<string, unknown> {
