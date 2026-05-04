@@ -1,14 +1,14 @@
 # Current Summary
 
 - Phase: CAPTCHA configuration backend/API development.
-- First pending task: Verify Turnstile, hCaptcha, and reCAPTCHA tokens before admin password authentication.
+- First pending task: Verify Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA payloads before admin password authentication.
 - Recommended startup path: `AGENTS.md -> agent-state.md -> feature_list.json -> codex-progress.md`.
 - Active blockers: none.
 
 # Queue Snapshot
 
-- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read API; disabled CAPTCHA save API; all six provider settings validation and persistence.
-- Pending next: CAPTCHA verification, admin settings UI, and login UI tasks.
+- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read API; disabled CAPTCHA save API; all six provider settings validation and persistence; Turnstile/hCaptcha/reCAPTCHA login token verification.
+- Pending next: advanced CAPTCHA provider login verification, admin settings UI, and login UI tasks.
 
 # Recent Entries
 
@@ -25,3 +25,5 @@
 - 2026-05-05 Worker 5: Completed backend task “Validate and persist Turnstile, hCaptcha, and reCAPTCHA settings.” Extended authenticated `PATCH /api/admin/captcha/settings` to accept `cloudflare_turnstile`, `hcaptcha`, and `google_recaptcha` when enabled, require `publicParams.siteKey` and `secretParams.secretKey`, persist public/secret parameter JSON, and keep raw secrets redacted on read. Verified valid updates for all three providers, 400 on a missing required key, and no mutation after the rejected request. Validation: `./init.sh`, targeted `yarn vitest run test/admin-routes.test.ts test/database-captcha.test.ts`, and `yarn run check`.
 
 - 2026-05-05 Worker 6: Completed backend task “Validate and persist Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA settings.” Extended authenticated `PATCH /api/admin/captcha/settings` to accept `tencent_cloud_captcha`, `alibaba_cloud_captcha_2`, and `geetest_captcha` when enabled, require provider-specific public params and secret credentials, persist public/secret parameter JSON, and keep raw secrets redacted on read. Verified valid updates for all three providers, 400 on an unsupported provider, and no mutation after the rejected request. Validation: `./init.sh`, targeted `yarn vitest run test/admin-routes.test.ts test/database-captcha.test.ts`, and `yarn run check`.
+
+- 2026-05-05 Worker 7: Completed backend task “Verify Turnstile, hCaptcha, and reCAPTCHA tokens before admin password authentication.” Added login-time verification for `cloudflare_turnstile`, `hcaptcha`, and `google_recaptcha` using saved `secretParams.secretKey`, accepted `captchaToken` in `POST /api/admin/login`, rejected missing/failed CAPTCHA before password lookup, and verified successful CAPTCHA allows the existing password/session flow. Validation: `./init.sh`, targeted `yarn vitest run test/admin-login-captcha.test.ts test/admin-routes.test.ts test/database-captcha.test.ts`, and `yarn run check`.

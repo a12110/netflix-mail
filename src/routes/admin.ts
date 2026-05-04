@@ -12,10 +12,13 @@ import {
 } from "../services/auth";
 import {
   CaptchaSettingsValidationError,
+  CaptchaVerificationError,
   type CaptchaProvider,
   getAdminCaptchaSettings,
+  getEnabledLoginCaptchaSettings,
   getPublicLoginCaptchaChallenge,
-  updateAdminCaptchaSettings
+  updateAdminCaptchaSettings,
+  verifyLoginCaptchaToken
 } from "../services/captcha-settings";
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
@@ -40,6 +43,7 @@ import { timingSafeEqual } from "../utils/encoding";
 interface LoginBody {
   username?: string;
   password?: string;
+  captchaToken?: string;
 }
 
 interface SetupBody extends LoginBody {
@@ -128,6 +132,10 @@ async function login(c: Context<AppEnv>): Promise<Response> {
   if (!body?.username || !body.password) {
     return badRequest(c, "username and password are required.");
   }
+  const captchaResponse = await verifyLoginCaptcha(c, body);
+  if (captchaResponse) {
+    return captchaResponse;
+  }
   const admin = await authenticateAdmin(c.env.DB, body.username.trim(), body.password);
   if (!admin) {
     return unauthorized(c, "Invalid credentials.");
@@ -136,6 +144,26 @@ async function login(c: Context<AppEnv>): Promise<Response> {
   c.header("Set-Cookie", sessionSetCookie(session));
   await writeAccessLog(c.env.DB, { actorType: "admin", actorId: admin.id, action: "admin.login", request: c.req.raw });
   return c.json({ ok: true, admin: publicAdmin(admin) });
+}
+
+async function verifyLoginCaptcha(c: Context<AppEnv>, body: LoginBody): Promise<Response | null> {
+  const settings = await getEnabledLoginCaptchaSettings(c.env.DB);
+  if (!settings) {
+    return null;
+  }
+  const token = typeof body.captchaToken === "string" ? body.captchaToken.trim() : "";
+  if (!token) {
+    return badRequest(c, "CAPTCHA token is required.");
+  }
+  try {
+    const verified = await verifyLoginCaptchaToken({ settings, token });
+    return verified ? null : unauthorized(c, "CAPTCHA verification failed.");
+  } catch (error) {
+    if (error instanceof CaptchaVerificationError) {
+      return badRequest(c, error.message);
+    }
+    throw error;
+  }
 }
 
 async function withAdmin(c: Context<AppEnv>, handler: (admin: AdminRow) => Promise<Response> | Response): Promise<Response> {

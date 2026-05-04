@@ -16,6 +16,14 @@ export interface LoginCaptchaSettings {
   secretParams: Record<string, unknown>;
 }
 
+export type CaptchaVerifierFetch = typeof fetch;
+
+export interface CaptchaVerificationInput {
+  settings: LoginCaptchaSettings;
+  token: string;
+  fetcher?: CaptchaVerifierFetch;
+}
+
 interface LoginCaptchaSettingsRow {
   enabled: number;
   provider: CaptchaProvider;
@@ -74,6 +82,8 @@ export interface AdminCaptchaSettingsUpdate {
 
 export class CaptchaSettingsValidationError extends Error {}
 
+export class CaptchaVerificationError extends Error {}
+
 const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: ["siteKey"],
   hcaptcha: ["siteKey"],
@@ -86,6 +96,11 @@ const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
 const SECRET_PARAM_KEY_PATTERN = /secret|token|private|credential|keyid|accesskey|appsecret|captchaappsecret/i;
 const BROWSER_PUBLIC_KEY = "siteKey";
 const SERVER_SECRET_KEY = "secretKey";
+const CAPTCHA_VERIFY_ENDPOINTS: Partial<Record<CaptchaProvider, string>> = {
+  cloudflare_turnstile: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+  hcaptcha: "https://api.hcaptcha.com/siteverify",
+  google_recaptcha: "https://www.google.com/recaptcha/api/siteverify"
+};
 const REQUIRED_SECRET_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: [SERVER_SECRET_KEY],
   hcaptcha: [SERVER_SECRET_KEY],
@@ -152,8 +167,55 @@ export async function getPublicLoginCaptchaChallenge(db: D1Database): Promise<Pu
   };
 }
 
+export async function getEnabledLoginCaptchaSettings(db: D1Database): Promise<LoginCaptchaSettings | null> {
+  if (!(await loginCaptchaSettingsTableExists(db))) {
+    return null;
+  }
+  const settings = await getLoginCaptchaSettings(db);
+  return settings.enabled ? settings : null;
+}
+
+export async function verifyLoginCaptchaToken(input: CaptchaVerificationInput): Promise<boolean> {
+  const endpoint = CAPTCHA_VERIFY_ENDPOINTS[input.settings.provider];
+  if (!endpoint) {
+    throw new CaptchaVerificationError("CAPTCHA verification is not supported for this provider.");
+  }
+  const secretKey = getRequiredString(input.settings.secretParams, SERVER_SECRET_KEY, "secretParams");
+  const response = await (input.fetcher ?? fetch)(endpoint, {
+    method: "POST",
+    body: buildVerificationBody(secretKey, input.token),
+    headers: { "content-type": "application/x-www-form-urlencoded" }
+  });
+  if (!response.ok) {
+    return false;
+  }
+  return parseVerificationSuccess(await response.json());
+}
+
 function disabledChallenge(): PublicCaptchaChallenge {
   return { enabled: false };
+}
+
+function buildVerificationBody(secretKey: string, token: string): URLSearchParams {
+  const body = new URLSearchParams();
+  body.set("secret", secretKey);
+  body.set("response", token);
+  return body;
+}
+
+function getRequiredString(params: Record<string, unknown>, key: string, fieldName: string): string {
+  const value = params[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new CaptchaVerificationError(`${fieldName}.${key} is required.`);
+  }
+  return value;
+}
+
+function parseVerificationSuccess(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return (value as { success?: unknown }).success === true;
 }
 
 async function loginCaptchaSettingsTableExists(db: D1Database): Promise<boolean> {
