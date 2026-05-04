@@ -49,7 +49,7 @@
       "Read the public login challenge API after disabling and verify it reports enabled false."
     ],
     "budget_minutes": 8,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "backend",

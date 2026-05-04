@@ -1,14 +1,14 @@
 # Current Summary
 
 - Phase: CAPTCHA configuration backend/API development.
-- First pending task: Let signed-in admins save a disabled CAPTCHA configuration safely.
+- First pending task: Validate and persist Turnstile, hCaptcha, and reCAPTCHA settings.
 - Recommended startup path: `AGENTS.md -> agent-state.md -> feature_list.json -> codex-progress.md`.
 - Active blockers: none.
 
 # Queue Snapshot
 
-- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read API.
-- Pending next: admin disabled CAPTCHA save API, then provider validation, verification, and login UI tasks.
+- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read API; disabled CAPTCHA save API.
+- Pending next: provider validation, CAPTCHA verification, admin settings UI, and login UI tasks.
 
 # Recent Entries
 
@@ -19,3 +19,5 @@
 - 2026-05-05 Worker 2: Completed backend task “Expose the login page CAPTCHA challenge state without requiring an admin session.” Added public `GET /api/admin/login/captcha`, filtered CAPTCHA responses to provider plus browser-safe public parameters, and verified stored secret values are absent from the public response. Validation: `./init.sh`, targeted `yarn test test/admin-routes.test.ts` with 60s timeout, and `yarn run check` with 60s timeout. Also fixed a shared test mock `all()` signature so the backend check compiles.
 
 - 2026-05-05 Worker 3: Completed backend task “Let signed-in admins read CAPTCHA settings without exposing stored secrets.” Added authenticated `GET /api/admin/captcha/settings`, returned current enabled/provider/public params, and redacted every saved secret param value as `[redacted]`. Validation: `./init.sh`, targeted `yarn test test/admin-routes.test.ts` with 60s Python subprocess timeout, and `yarn run check` with 60s Python subprocess timeout.
+
+- 2026-05-05 Worker 4: Completed backend task “Let signed-in admins save a disabled CAPTCHA configuration safely.” Added authenticated `PATCH /api/admin/captcha/settings` handling for `{ "enabled": false }`, persisted disabled state by updating only the `enabled` flag, preserved existing provider params and admin sessions, and verified the public login CAPTCHA challenge reports disabled after update. Validation: `./init.sh`, targeted `yarn vitest run test/admin-routes.test.ts test/database-captcha.test.ts`, and `yarn run check`.

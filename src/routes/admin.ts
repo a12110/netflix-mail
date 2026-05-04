@@ -10,7 +10,11 @@ import {
   sessionSetCookie,
   verifySessionValue
 } from "../services/auth";
-import { getAdminCaptchaSettings, getPublicLoginCaptchaChallenge } from "../services/captcha-settings";
+import {
+  getAdminCaptchaSettings,
+  getPublicLoginCaptchaChallenge,
+  updateAdminCaptchaSettings
+} from "../services/captcha-settings";
 import { applyPendingDatabaseMigrations, ensureDatabaseSchema, getDatabaseStatus } from "../services/database";
 import { getEmailDetail, listEmailPage } from "../services/emails";
 import { writeAccessLog } from "../services/logs";
@@ -40,6 +44,10 @@ interface SetupBody extends LoginBody {
   setupToken?: string;
 }
 
+interface CaptchaSettingsUpdateBody {
+  enabled?: unknown;
+}
+
 interface ShareLinkBody {
   name?: string | null;
   expiresAt?: string | null;
@@ -63,6 +71,7 @@ export function registerAdminRoutes(app: Hono<AppEnv>): void {
   });
   app.get("/api/admin/me", async (c) => withAdmin(c, (admin) => c.json({ ok: true, admin: publicAdmin(admin) })));
   app.get("/api/admin/captcha/settings", async (c) => withAdmin(c, () => adminCaptchaSettings(c)));
+  app.patch("/api/admin/captcha/settings", async (c) => withAdmin(c, () => adminUpdateCaptchaSettings(c)));
   app.get("/api/admin/emails", async (c) => withAdmin(c, () => adminListEmails(c)));
   app.get("/api/admin/emails/:id", async (c) => withAdmin(c, () => adminEmailDetail(c)));
   app.get("/api/admin/rules", async (c) => withAdmin(c, () => adminListRules(c)));
@@ -135,6 +144,14 @@ async function withAdmin(c: Context<AppEnv>, handler: (admin: AdminRow) => Promi
 
 async function adminCaptchaSettings(c: Context<AppEnv>): Promise<Response> {
   return c.json({ ok: true, captcha: await getAdminCaptchaSettings(c.env.DB) });
+}
+
+async function adminUpdateCaptchaSettings(c: Context<AppEnv>): Promise<Response> {
+  const body = await readJson<CaptchaSettingsUpdateBody>(c);
+  if (body?.enabled !== false) {
+    return badRequest(c, "enabled false is required.");
+  }
+  return c.json({ ok: true, captcha: await updateAdminCaptchaSettings(c.env.DB, { enabled: false }) });
 }
 
 async function adminListEmails(c: Context<AppEnv>): Promise<Response> {

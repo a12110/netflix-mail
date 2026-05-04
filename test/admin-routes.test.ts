@@ -132,6 +132,9 @@ function createAdminCaptchaDb(row: CaptchaRow): D1Database {
       const statement = {
         bind: () => statement,
         first: async () => {
+          if (sql.includes("sqlite_master")) {
+            return { name: "login_captcha_settings" };
+          }
           if (sql.includes("SELECT * FROM admins WHERE id")) {
             return CAPTCHA_ADMIN;
           }
@@ -140,7 +143,12 @@ function createAdminCaptchaDb(row: CaptchaRow): D1Database {
           }
           return null;
         },
-        run: async () => ({ meta: { last_row_id: 1 } }),
+        run: async () => {
+          if (sql.includes("UPDATE login_captcha_settings")) {
+            row.enabled = 0;
+          }
+          return { meta: { last_row_id: 1 } };
+        },
         all: async () => ({ results: [] })
       };
       return statement;
@@ -238,5 +246,66 @@ describe("authenticated admin CAPTCHA settings route", () => {
     });
     expect(text).not.toContain("stored-secret");
     expect(text).not.toContain("raw-token");
+  });
+
+  it("lets a signed-in admin save a disabled CAPTCHA setting without provider parameters", async () => {
+    const unrelatedData = { adminSessionShouldRemainValid: true, unrelatedRows: 3 };
+    const env = {
+      DB: createAdminCaptchaDb({
+        enabled: 1,
+        provider: "hcaptcha",
+        public_params_json: JSON.stringify({ siteKey: "site-public" }),
+        secret_params_json: JSON.stringify({ secretKey: "stored-secret" })
+      }),
+      SESSION_SECRET: "test-secret"
+    } as Env;
+    const session = await createCaptchaAdminSession(env);
+    const headers = {
+      Cookie: `${SESSION_COOKIE}=${session}`,
+      "content-type": "application/json"
+    };
+
+    const updateResponse = await worker.fetch(
+      new Request("http://localhost/api/admin/captcha/settings", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ enabled: false })
+      }),
+      env
+    );
+    const updateBody = await updateResponse.json() as {
+      captcha: { enabled: boolean; provider: string; publicParams: Record<string, unknown>; secretParams: Record<string, string> };
+    };
+    const readResponse = await worker.fetch(
+      new Request("http://localhost/api/admin/captcha/settings", {
+        headers: { Cookie: `${SESSION_COOKIE}=${session}` }
+      }),
+      env
+    );
+    const readBody = await readResponse.json() as {
+      captcha: { enabled: boolean; provider: string; publicParams: Record<string, unknown>; secretParams: Record<string, string> };
+    };
+    const meResponse = await worker.fetch(
+      new Request("http://localhost/api/admin/me", {
+        headers: { Cookie: `${SESSION_COOKIE}=${session}` }
+      }),
+      env
+    );
+    const publicResponse = await worker.fetch(new Request("http://localhost/api/admin/login/captcha"), env);
+    const publicBody = await publicResponse.json() as { captcha: { enabled: boolean; provider?: string; publicParams?: Record<string, unknown> } };
+
+    expect(updateResponse.status).toBe(200);
+    expect(updateBody.captcha).toEqual({
+      enabled: false,
+      provider: "hcaptcha",
+      publicParams: { siteKey: "site-public" },
+      secretParams: { secretKey: "[redacted]" }
+    });
+    expect(readResponse.status).toBe(200);
+    expect(readBody.captcha.enabled).toBe(false);
+    expect(meResponse.status).toBe(200);
+    expect(unrelatedData).toEqual({ adminSessionShouldRemainValid: true, unrelatedRows: 3 });
+    expect(publicResponse.status).toBe(200);
+    expect(publicBody.captcha).toEqual({ enabled: false });
   });
 });

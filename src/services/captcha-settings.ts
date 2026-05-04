@@ -65,6 +65,10 @@ export interface AdminCaptchaSettings {
   secretParams: Record<string, string>;
 }
 
+export interface AdminCaptchaSettingsUpdate {
+  enabled: boolean;
+}
+
 const PUBLIC_PARAM_KEYS: Record<CaptchaProvider, readonly string[]> = {
   cloudflare_turnstile: ["siteKey"],
   hcaptcha: ["siteKey"],
@@ -84,6 +88,24 @@ export async function getAdminCaptchaSettings(db: D1Database): Promise<AdminCapt
     publicParams: settings.publicParams,
     secretParams: redactSecretParams(settings.secretParams)
   };
+}
+
+export async function updateAdminCaptchaSettings(
+  db: D1Database,
+  update: AdminCaptchaSettingsUpdate
+): Promise<AdminCaptchaSettings> {
+  if (update.enabled) {
+    throw new Error("Enabled CAPTCHA settings are not supported yet.");
+  }
+  await db
+    .prepare(
+      `UPDATE login_captcha_settings
+       SET enabled = 0,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = 1`
+    )
+    .run();
+  return await getAdminCaptchaSettings(db);
 }
 
 export async function getPublicLoginCaptchaChallenge(db: D1Database): Promise<PublicCaptchaChallenge> {
