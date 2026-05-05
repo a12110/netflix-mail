@@ -351,7 +351,8 @@ pre {
   background: var(--surface-muted);
 }
 .login-captcha-card.warning { border-color: #fed7aa; background: var(--warning-soft); color: #9a3412; }
-.login-captcha-script-hook { min-height: 44px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
+.login-captcha-script-hook { min-height: 44px; }
+.login-captcha-card .login-captcha-script-hook { border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
 .form-actions { display: grid; gap: 12px; margin-top: 20px; }
 .setup-shell { min-height: 100vh; padding: 28px; }
 .setup-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 44px; }

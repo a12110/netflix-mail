@@ -32,6 +32,13 @@ describe("view templates", () => {
     expect(html).toContain('id="login-section" class="hero-auth hidden"');
     expect(html).toContain('/api/admin/login/captcha');
     expect(html).toContain('data-login-captcha-script-hook');
+    expect(html).toContain('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit');
+    expect(html).toContain('https://js.hcaptcha.com/1/api.js?render=explicit');
+    expect(html).toContain('https://www.google.com/recaptcha/api.js?render=explicit');
+    expect(html).toContain('window.turnstile.render');
+    expect(html).toContain('state.loginCaptchaResponse.token || readMockCaptchaToken()');
+    expect(html).toContain('return loginCaptchaScriptHookHtml(provider, publicParams);');
+    expect(html).toContain('.login-captcha-card .login-captcha-script-hook');
     expect(html).toContain('__NETFLIX_MAIL_CAPTCHA_RESPONSE__');
     expect(html).not.toContain('href="/setup"');
     expect(html).not.toContain('id="rule-form"');

@@ -2319,6 +2319,328 @@ function sessionClearCookie() {
 }
 __name(sessionClearCookie, "sessionClearCookie");
 
+// src/services/captcha-settings.ts
+var CAPTCHA_PROVIDERS = [
+  "cloudflare_turnstile",
+  "hcaptcha",
+  "google_recaptcha",
+  "tencent_cloud_captcha",
+  "alibaba_cloud_captcha_2",
+  "geetest_captcha"
+];
+async function getLoginCaptchaSettings(db) {
+  const row = await db.prepare(
+    `SELECT enabled, provider, public_params_json, secret_params_json
+       FROM login_captcha_settings
+       WHERE id = 1`
+  ).first();
+  if (!row) {
+    throw new Error("Login CAPTCHA settings are missing. Run the database upgrade first.");
+  }
+  return {
+    enabled: row.enabled === 1,
+    provider: row.provider,
+    publicParams: parseParams(row.public_params_json, "public_params_json"),
+    secretParams: parseParams(row.secret_params_json, "secret_params_json")
+  };
+}
+__name(getLoginCaptchaSettings, "getLoginCaptchaSettings");
+function parseParams(value, fieldName) {
+  const parsed = JSON.parse(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`Invalid CAPTCHA ${fieldName}.`);
+  }
+  return parsed;
+}
+__name(parseParams, "parseParams");
+var CaptchaSettingsValidationError = class extends Error {
+  static {
+    __name(this, "CaptchaSettingsValidationError");
+  }
+};
+var CaptchaVerificationError = class extends Error {
+  static {
+    __name(this, "CaptchaVerificationError");
+  }
+};
+var PUBLIC_PARAM_KEYS = {
+  cloudflare_turnstile: ["siteKey"],
+  hcaptcha: ["siteKey"],
+  google_recaptcha: ["siteKey"],
+  tencent_cloud_captcha: ["captchaAppId", "appId"],
+  alibaba_cloud_captcha_2: ["captchaId", "sceneId", "prefix"],
+  geetest_captcha: ["captchaId"]
+};
+var SECRET_PARAM_KEY_PATTERN = /secret|token|private|credential|keyid|accesskey|appsecret|captchaappsecret/i;
+var SERVER_SECRET_KEY = "secretKey";
+var CAPTCHA_VERIFY_ENDPOINTS = {
+  cloudflare_turnstile: "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+  hcaptcha: "https://api.hcaptcha.com/siteverify",
+  google_recaptcha: "https://www.google.com/recaptcha/api/siteverify",
+  tencent_cloud_captcha: "https://captcha.tencentcloudapi.com/",
+  alibaba_cloud_captcha_2: "https://captcha.aliyuncs.com/verify",
+  geetest_captcha: "https://gcaptcha4.geetest.com/validate"
+};
+var BASIC_CAPTCHA_PROVIDERS = [
+  "cloudflare_turnstile",
+  "hcaptcha",
+  "google_recaptcha"
+];
+var CAPTCHA_PAYLOAD_KEYS = {
+  tencent_cloud_captcha: ["ticket", "randstr"],
+  alibaba_cloud_captcha_2: ["captchaVerifyParam"],
+  geetest_captcha: ["captchaOutput", "lotNumber", "passToken", "genTime"]
+};
+var REQUIRED_SECRET_PARAM_KEYS = {
+  cloudflare_turnstile: [SERVER_SECRET_KEY],
+  hcaptcha: [SERVER_SECRET_KEY],
+  google_recaptcha: [SERVER_SECRET_KEY],
+  tencent_cloud_captcha: ["secretId", SERVER_SECRET_KEY],
+  alibaba_cloud_captcha_2: ["accessKeyId", "accessKeySecret"],
+  geetest_captcha: ["captchaKey"]
+};
+async function getAdminCaptchaSettings(db) {
+  const settings = await getLoginCaptchaSettings(db);
+  return {
+    enabled: settings.enabled,
+    provider: settings.provider,
+    publicParams: settings.publicParams,
+    secretParams: redactSecretParams(settings.secretParams)
+  };
+}
+__name(getAdminCaptchaSettings, "getAdminCaptchaSettings");
+async function updateAdminCaptchaSettings(db, update) {
+  if (!update.enabled) {
+    await db.prepare(
+      `UPDATE login_captcha_settings
+         SET enabled = 0,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE id = 1`
+    ).run();
+    return await getAdminCaptchaSettings(db);
+  }
+  const validated = validateEnabledProviderUpdate(update);
+  await db.prepare(
+    `UPDATE login_captcha_settings
+       SET enabled = 1,
+           provider = ?1,
+           public_params_json = ?2,
+           secret_params_json = ?3,
+           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+       WHERE id = 1`
+  ).bind(validated.provider, JSON.stringify(validated.publicParams), JSON.stringify(validated.secretParams)).run();
+  return await getAdminCaptchaSettings(db);
+}
+__name(updateAdminCaptchaSettings, "updateAdminCaptchaSettings");
+async function getPublicLoginCaptchaChallenge(db) {
+  if (!await loginCaptchaSettingsTableExists(db)) {
+    return disabledChallenge();
+  }
+  const settings = await getLoginCaptchaSettings(db);
+  if (!settings.enabled) {
+    return disabledChallenge();
+  }
+  return {
+    enabled: true,
+    provider: settings.provider,
+    publicParams: pickPublicParams(settings.provider, settings.publicParams)
+  };
+}
+__name(getPublicLoginCaptchaChallenge, "getPublicLoginCaptchaChallenge");
+async function getEnabledLoginCaptchaSettings(db) {
+  if (!await loginCaptchaSettingsTableExists(db)) {
+    return null;
+  }
+  const settings = await getLoginCaptchaSettings(db);
+  return settings.enabled ? settings : null;
+}
+__name(getEnabledLoginCaptchaSettings, "getEnabledLoginCaptchaSettings");
+async function verifyLoginCaptchaToken(input) {
+  const endpoint = CAPTCHA_VERIFY_ENDPOINTS[input.settings.provider];
+  if (!endpoint) {
+    throw new CaptchaVerificationError("CAPTCHA verification is not supported for this provider.");
+  }
+  const request = buildProviderVerificationRequest(input, endpoint);
+  const response = await (input.fetcher ?? fetch)(endpoint, request);
+  if (!response.ok) {
+    return false;
+  }
+  return parseVerificationSuccess(await response.json());
+}
+__name(verifyLoginCaptchaToken, "verifyLoginCaptchaToken");
+function disabledChallenge() {
+  return { enabled: false };
+}
+__name(disabledChallenge, "disabledChallenge");
+function buildProviderVerificationRequest(input, endpoint) {
+  if (isBasicCaptchaProvider(input.settings.provider)) {
+    return buildBasicVerificationRequest(input);
+  }
+  const payload = requireCaptchaPayload(input.settings.provider, input.payload);
+  if (input.settings.provider === "tencent_cloud_captcha") {
+    return buildTencentVerificationRequest(input.settings, payload);
+  }
+  if (input.settings.provider === "alibaba_cloud_captcha_2") {
+    return buildAlibabaVerificationRequest(input.settings, payload);
+  }
+  return buildGeetestVerificationRequest(input.settings, payload);
+}
+__name(buildProviderVerificationRequest, "buildProviderVerificationRequest");
+function buildBasicVerificationRequest(input) {
+  const token = typeof input.token === "string" ? input.token.trim() : "";
+  if (!token) {
+    throw new CaptchaVerificationError("CAPTCHA token is required.");
+  }
+  const secretKey = getRequiredString(input.settings.secretParams, SERVER_SECRET_KEY, "secretParams");
+  return {
+    method: "POST",
+    body: buildBasicVerificationBody(secretKey, token),
+    headers: { "content-type": "application/x-www-form-urlencoded" }
+  };
+}
+__name(buildBasicVerificationRequest, "buildBasicVerificationRequest");
+function buildBasicVerificationBody(secretKey, token) {
+  const body = new URLSearchParams();
+  body.set("secret", secretKey);
+  body.set("response", token);
+  return body;
+}
+__name(buildBasicVerificationBody, "buildBasicVerificationBody");
+function buildTencentVerificationRequest(settings, payload) {
+  const secretId = getRequiredString(settings.secretParams, "secretId", "secretParams");
+  return jsonVerificationRequest({
+    secretId,
+    secretKey: getRequiredString(settings.secretParams, SERVER_SECRET_KEY, "secretParams"),
+    captchaAppId: getRequiredString(settings.publicParams, "captchaAppId", "publicParams"),
+    appId: getRequiredString(settings.publicParams, "appId", "publicParams"),
+    ticket: getRequiredString(payload, "ticket", "captchaPayload"),
+    randstr: getRequiredString(payload, "randstr", "captchaPayload")
+  }, { "x-tc-secret-id": secretId });
+}
+__name(buildTencentVerificationRequest, "buildTencentVerificationRequest");
+function buildAlibabaVerificationRequest(settings, payload) {
+  const accessKeyId = getRequiredString(settings.secretParams, "accessKeyId", "secretParams");
+  return jsonVerificationRequest({
+    accessKeyId,
+    accessKeySecret: getRequiredString(settings.secretParams, "accessKeySecret", "secretParams"),
+    captchaId: getRequiredString(settings.publicParams, "captchaId", "publicParams"),
+    sceneId: getRequiredString(settings.publicParams, "sceneId", "publicParams"),
+    prefix: getRequiredString(settings.publicParams, "prefix", "publicParams"),
+    captchaVerifyParam: getRequiredString(payload, "captchaVerifyParam", "captchaPayload")
+  }, { "x-acs-access-key-id": accessKeyId });
+}
+__name(buildAlibabaVerificationRequest, "buildAlibabaVerificationRequest");
+function buildGeetestVerificationRequest(settings, payload) {
+  return jsonVerificationRequest({
+    captchaId: getRequiredString(settings.publicParams, "captchaId", "publicParams"),
+    captchaKey: getRequiredString(settings.secretParams, "captchaKey", "secretParams"),
+    captchaOutput: getRequiredString(payload, "captchaOutput", "captchaPayload"),
+    lotNumber: getRequiredString(payload, "lotNumber", "captchaPayload"),
+    passToken: getRequiredString(payload, "passToken", "captchaPayload"),
+    genTime: getRequiredString(payload, "genTime", "captchaPayload")
+  });
+}
+__name(buildGeetestVerificationRequest, "buildGeetestVerificationRequest");
+function jsonVerificationRequest(value, headers = {}) {
+  return {
+    method: "POST",
+    body: JSON.stringify(value),
+    headers: { "content-type": "application/json", ...headers }
+  };
+}
+__name(jsonVerificationRequest, "jsonVerificationRequest");
+function requireCaptchaPayload(provider, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CaptchaVerificationError("captchaPayload is required.");
+  }
+  for (const key of CAPTCHA_PAYLOAD_KEYS[provider] ?? []) {
+    getRequiredString(value, key, "captchaPayload");
+  }
+  return value;
+}
+__name(requireCaptchaPayload, "requireCaptchaPayload");
+function isBasicCaptchaProvider(provider) {
+  return BASIC_CAPTCHA_PROVIDERS.includes(provider);
+}
+__name(isBasicCaptchaProvider, "isBasicCaptchaProvider");
+function getRequiredString(params, key, fieldName) {
+  const value = params[key];
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new CaptchaVerificationError(`${fieldName}.${key} is required.`);
+  }
+  return value;
+}
+__name(getRequiredString, "getRequiredString");
+function parseVerificationSuccess(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const result = value;
+  return result.success === true || result.result === true || result.result === "success" || result.status === "success" || result.CaptchaCode === 1 || parseNestedTencentSuccess(result.Response);
+}
+__name(parseVerificationSuccess, "parseVerificationSuccess");
+function parseNestedTencentSuccess(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return value.CaptchaCode === 1;
+}
+__name(parseNestedTencentSuccess, "parseNestedTencentSuccess");
+async function loginCaptchaSettingsTableExists(db) {
+  const row = await db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1").bind("login_captcha_settings").first();
+  return Boolean(row);
+}
+__name(loginCaptchaSettingsTableExists, "loginCaptchaSettingsTableExists");
+function redactSecretParams(params) {
+  return Object.fromEntries(Object.keys(params).map((key) => [key, "[redacted]"]));
+}
+__name(redactSecretParams, "redactSecretParams");
+function validateEnabledProviderUpdate(update) {
+  if (!update.provider || !isCaptchaProvider(update.provider)) {
+    throw new CaptchaSettingsValidationError("Unsupported CAPTCHA provider.");
+  }
+  const publicParams = requireParamRecord(update.publicParams, "publicParams");
+  const secretParams = requireParamRecord(update.secretParams, "secretParams");
+  requireStringParams(publicParams, PUBLIC_PARAM_KEYS[update.provider], "publicParams");
+  requireStringParams(secretParams, REQUIRED_SECRET_PARAM_KEYS[update.provider], "secretParams");
+  return {
+    enabled: true,
+    provider: update.provider,
+    publicParams,
+    secretParams
+  };
+}
+__name(validateEnabledProviderUpdate, "validateEnabledProviderUpdate");
+function isCaptchaProvider(value) {
+  return CAPTCHA_PROVIDERS.includes(value);
+}
+__name(isCaptchaProvider, "isCaptchaProvider");
+function requireParamRecord(value, fieldName) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new CaptchaSettingsValidationError(`${fieldName} is required.`);
+  }
+  return value;
+}
+__name(requireParamRecord, "requireParamRecord");
+function requireStringParam(params, key, fieldName) {
+  if (typeof params[key] !== "string" || params[key].trim() === "") {
+    throw new CaptchaSettingsValidationError(`${fieldName}.${key} is required.`);
+  }
+}
+__name(requireStringParam, "requireStringParam");
+function requireStringParams(params, keys, fieldName) {
+  for (const key of keys) {
+    requireStringParam(params, key, fieldName);
+  }
+}
+__name(requireStringParams, "requireStringParams");
+function pickPublicParams(provider, params) {
+  return Object.fromEntries(
+    PUBLIC_PARAM_KEYS[provider].filter((key) => Object.prototype.hasOwnProperty.call(params, key) && !SECRET_PARAM_KEY_PATTERN.test(key)).map((key) => [key, params[key]])
+  );
+}
+__name(pickPublicParams, "pickPublicParams");
+
 // src/services/database.ts
 var MIGRATION_TABLE_SQL = String.raw`
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -2448,11 +2770,45 @@ var SHARE_LINK_RULE_LOGIC_SQL = String.raw`
 ALTER TABLE share_links ADD COLUMN allow_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (allow_rule_logic IN ('and', 'or'));
 ALTER TABLE share_links ADD COLUMN block_rule_logic TEXT NOT NULL DEFAULT 'or' CHECK (block_rule_logic IN ('and', 'or'));
 `;
+var LOGIN_CAPTCHA_SETTINGS_SQL = String.raw`
+CREATE TABLE IF NOT EXISTS login_captcha_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0, 1)),
+  provider TEXT NOT NULL DEFAULT 'cloudflare_turnstile' CHECK (
+    provider IN (
+      'cloudflare_turnstile',
+      'hcaptcha',
+      'google_recaptcha',
+      'tencent_cloud_captcha',
+      'alibaba_cloud_captcha_2',
+      'geetest_captcha'
+    )
+  ),
+  public_params_json TEXT NOT NULL DEFAULT '{}',
+  secret_params_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+  updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+INSERT OR IGNORE INTO login_captcha_settings (
+  id,
+  enabled,
+  provider,
+  public_params_json,
+  secret_params_json
+) VALUES (
+  1,
+  0,
+  'cloudflare_turnstile',
+  '{}',
+  '{}'
+)`;
 var DATABASE_MIGRATIONS = [
   { id: "0001_initial", version: "v0.0.1", description: "\u521D\u59CB\u5316\u6838\u5FC3\u8868\u3001\u7D22\u5F15\u4E0E\u8BBF\u95EE\u65E5\u5FD7", sql: INITIAL_SCHEMA_SQL },
   { id: "0002_share_link_token", version: "v0.0.2", description: "\u4FDD\u5B58\u5206\u4EAB\u94FE\u63A5 token \u4EE5\u4FBF\u540E\u53F0\u91CD\u65B0\u590D\u5236", sql: SHARE_LINK_TOKEN_SQL },
   { id: "0003_rule_expressions", version: "v0.0.3", description: "\u652F\u6301\u89C4\u5219\u767D\u9ED1\u540D\u5355\u4E0E\u9AD8\u7EA7\u8868\u8FBE\u5F0F", sql: RULE_EXPRESSIONS_SQL },
-  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "\u652F\u6301\u5206\u4EAB\u94FE\u63A5\u5141\u8BB8/\u6392\u9664\u89C4\u5219\u7EC4\u5408\u903B\u8F91", sql: SHARE_LINK_RULE_LOGIC_SQL }
+  { id: "0004_share_link_rule_logic", version: "v0.0.4", description: "\u652F\u6301\u5206\u4EAB\u94FE\u63A5\u5141\u8BB8/\u6392\u9664\u89C4\u5219\u7EC4\u5408\u903B\u8F91", sql: SHARE_LINK_RULE_LOGIC_SQL },
+  { id: "0005_login_captcha_settings", version: "v0.0.5", description: "\u4FDD\u5B58\u540E\u53F0\u767B\u5F55 CAPTCHA \u9ED8\u8BA4\u5173\u95ED\u914D\u7F6E", sql: LOGIN_CAPTCHA_SETTINGS_SQL }
 ];
 var UNINITIALIZED_DATABASE_VERSION = "\u672A\u521D\u59CB\u5316";
 async function ensureDatabaseSchema(db) {
@@ -2491,6 +2847,9 @@ async function buildDatabaseResult(db, migrations, appliedMigrations) {
 }
 __name(buildDatabaseResult, "buildDatabaseResult");
 async function currentVersionFromSchema(db, migrations) {
+  if (await tableExists(db, "login_captcha_settings")) {
+    return migrationVersion("0005_login_captcha_settings");
+  }
   if (await columnExists(db, "share_links", "allow_rule_logic") && await columnExists(db, "share_links", "block_rule_logic")) {
     return migrationVersion("0004_share_link_rule_logic");
   }
@@ -7433,12 +7792,15 @@ function registerAdminRoutes(app2) {
     return c.json({ ok: true, hasAdmin: await countAdmins(c.env.DB) > 0 });
   });
   app2.post("/api/setup/admin", createFirstAdmin);
+  app2.get("/api/admin/login/captcha", publicLoginCaptchaChallenge);
   app2.post("/api/admin/login", login);
   app2.post("/api/admin/logout", async (c) => {
     c.header("Set-Cookie", sessionClearCookie());
     return c.json({ ok: true });
   });
   app2.get("/api/admin/me", async (c) => withAdmin(c, (admin) => c.json({ ok: true, admin: publicAdmin(admin) })));
+  app2.get("/api/admin/captcha/settings", async (c) => withAdmin(c, () => adminCaptchaSettings(c)));
+  app2.patch("/api/admin/captcha/settings", async (c) => withAdmin(c, () => adminUpdateCaptchaSettings(c)));
   app2.get("/api/admin/emails", async (c) => withAdmin(c, () => adminListEmails(c)));
   app2.get("/api/admin/emails/:id", async (c) => withAdmin(c, () => adminEmailDetail(c)));
   app2.get("/api/admin/rules", async (c) => withAdmin(c, () => adminListRules(c)));
@@ -7481,10 +7843,18 @@ async function createFirstAdmin(c) {
   return c.json({ ok: true, id });
 }
 __name(createFirstAdmin, "createFirstAdmin");
+async function publicLoginCaptchaChallenge(c) {
+  return c.json({ ok: true, captcha: await getPublicLoginCaptchaChallenge(c.env.DB) });
+}
+__name(publicLoginCaptchaChallenge, "publicLoginCaptchaChallenge");
 async function login(c) {
   const body = await readJson(c);
   if (!body?.username || !body.password) {
     return badRequest(c, "username and password are required.");
+  }
+  const captchaResponse = await verifyLoginCaptcha(c, body);
+  if (captchaResponse) {
+    return captchaResponse;
   }
   const admin = await authenticateAdmin(c.env.DB, body.username.trim(), body.password);
   if (!admin) {
@@ -7496,6 +7866,26 @@ async function login(c) {
   return c.json({ ok: true, admin: publicAdmin(admin) });
 }
 __name(login, "login");
+async function verifyLoginCaptcha(c, body) {
+  const settings = await getEnabledLoginCaptchaSettings(c.env.DB);
+  if (!settings) {
+    return null;
+  }
+  try {
+    const verified = await verifyLoginCaptchaToken({
+      settings,
+      token: body.captchaToken,
+      payload: recordBodyField(body.captchaPayload)
+    });
+    return verified ? null : unauthorized(c, "CAPTCHA verification failed.");
+  } catch (error) {
+    if (error instanceof CaptchaVerificationError) {
+      return badRequest(c, error.message);
+    }
+    throw error;
+  }
+}
+__name(verifyLoginCaptcha, "verifyLoginCaptcha");
 async function withAdmin(c, handler) {
   const value = getCookie(c.req.raw, SESSION_COOKIE);
   const admin = await verifySessionValue(c.env.DB, c.env, value);
@@ -7505,6 +7895,41 @@ async function withAdmin(c, handler) {
   return await handler(admin);
 }
 __name(withAdmin, "withAdmin");
+async function adminCaptchaSettings(c) {
+  return c.json({ ok: true, captcha: await getAdminCaptchaSettings(c.env.DB) });
+}
+__name(adminCaptchaSettings, "adminCaptchaSettings");
+async function adminUpdateCaptchaSettings(c) {
+  const body = await readJson(c);
+  if (body?.enabled === false) {
+    return c.json({ ok: true, captcha: await updateAdminCaptchaSettings(c.env.DB, { enabled: false }) });
+  }
+  if (body?.enabled !== true) {
+    return badRequest(c, "enabled boolean is required.");
+  }
+  try {
+    const captcha = await updateAdminCaptchaSettings(c.env.DB, {
+      enabled: true,
+      provider: typeof body.provider === "string" ? body.provider : void 0,
+      publicParams: recordBodyField(body.publicParams),
+      secretParams: recordBodyField(body.secretParams)
+    });
+    return c.json({ ok: true, captcha });
+  } catch (error) {
+    if (error instanceof CaptchaSettingsValidationError) {
+      return badRequest(c, error.message);
+    }
+    throw error;
+  }
+}
+__name(adminUpdateCaptchaSettings, "adminUpdateCaptchaSettings");
+function recordBodyField(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return void 0;
+  }
+  return value;
+}
+__name(recordBodyField, "recordBodyField");
 async function adminListEmails(c) {
   const page2 = clampNumber(c.req.query("page"), 1, 1, MAX_EMAIL_PAGE);
   const pageSizeParam = c.req.query("pageSize") ?? c.req.query("limit");
@@ -8369,6 +8794,18 @@ pre {
 .feature-card { padding: 16px; display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .auth-card { padding: 42px; border-radius: 28px; background: rgba(255,255,255,0.86); border: 1px solid var(--line); box-shadow: var(--shadow-md); }
 .auth-card form { margin-top: 26px; }
+.login-captcha-challenge { margin-top: 18px; }
+.login-captcha-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.login-captcha-card.warning { border-color: #fed7aa; background: var(--warning-soft); color: #9a3412; }
+.login-captcha-script-hook { min-height: 44px; }
+.login-captcha-card .login-captcha-script-hook { border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
 .form-actions { display: grid; gap: 12px; margin-top: 20px; }
 .setup-shell { min-height: 100vh; padding: 28px; }
 .setup-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 44px; }
@@ -9338,13 +9775,43 @@ const state = {
   ruleBuilderPendingPointer: null,
   ruleBuilderMoveFrame: 0,
   ruleBuilderJsonDirty: false,
-  ruleBuilderCounter: 0
+  ruleBuilderCounter: 0,
+  captchaSettings: null,
+  loginCaptchaChallenge: null,
+  loginCaptchaResponse: { token: "", payload: null }
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
 const RULE_FIELD_OPTIONS = ["from", "to", "subject", "text", "html", "code"];
 const RULE_OPERATOR_OPTIONS = ["contains", "exact", "startsWith", "endsWith", "regex"];
 const RULE_FIELD_LABELS = { from: "From", to: "To", subject: "Subject", text: "Text", html: "HTML", code: "Code" };
 const RULE_OPERATOR_LABELS = { contains: "包含", exact: "完全相等", startsWith: "开头匹配", endsWith: "结尾匹配", regex: "正则" };
+const CAPTCHA_PROVIDER_LABELS = {
+  cloudflare_turnstile: "Cloudflare Turnstile",
+  hcaptcha: "hCaptcha",
+  google_recaptcha: "Google reCAPTCHA",
+  tencent_cloud_captcha: "Tencent Cloud CAPTCHA",
+  alibaba_cloud_captcha_2: "Alibaba Cloud CAPTCHA 2.0",
+  geetest_captcha: "GeeTest CAPTCHA"
+};
+const CAPTCHA_PARAM_KEYS = {
+  cloudflare_turnstile: { public: ["siteKey"], secret: ["secretKey"] },
+  hcaptcha: { public: ["siteKey"], secret: ["secretKey"] },
+  google_recaptcha: { public: ["siteKey"], secret: ["secretKey"] },
+  tencent_cloud_captcha: { public: ["captchaAppId", "appId"], secret: ["secretId", "secretKey"] },
+  alibaba_cloud_captcha_2: { public: ["captchaId", "sceneId", "prefix"], secret: ["accessKeyId", "accessKeySecret"] },
+  geetest_captcha: { public: ["captchaId"], secret: ["captchaKey"] }
+};
+const BASIC_LOGIN_CAPTCHA_PROVIDERS = ["cloudflare_turnstile", "hcaptcha", "google_recaptcha"];
+const BASIC_LOGIN_CAPTCHA_SCRIPT_URLS = {
+  cloudflare_turnstile: "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+  hcaptcha: "https://js.hcaptcha.com/1/api.js?render=explicit",
+  google_recaptcha: "https://www.google.com/recaptcha/api.js?render=explicit"
+};
+const ADVANCED_LOGIN_CAPTCHA_PAYLOAD_KEYS = {
+  tencent_cloud_captcha: ["ticket", "randstr"],
+  alibaba_cloud_captcha_2: ["captchaVerifyParam"],
+  geetest_captcha: ["captchaOutput", "lotNumber", "passToken", "genTime"]
+};
 const currentPage = "__ADMIN_SECTION__";
 const authLoading = document.querySelector("#auth-loading");
 const loginSection = document.querySelector("#login-section");
@@ -9376,13 +9843,195 @@ function showLogin() {
   logoutButton.classList.add("hidden");
   adminName.textContent = "";
   stopMailRefreshController();
+  void loadLoginCaptchaChallenge();
+}
+
+async function loadLoginCaptchaChallenge() {
+  const target = optional("#login-captcha-challenge");
+  if (!target) return;
+  try {
+    const data = await api("/api/admin/login/captcha");
+    state.loginCaptchaChallenge = data.captcha || { enabled: false };
+    renderLoginCaptchaChallenge(state.loginCaptchaChallenge);
+  } catch (error) {
+    state.loginCaptchaChallenge = null;
+    target.classList.remove("hidden");
+    target.innerHTML = '<div class="login-captcha-card warning">CAPTCHA 状态加载失败：' + escapeText(error.message) + '</div>';
+  }
+}
+
+function renderLoginCaptchaChallenge(challenge) {
+  const target = optional("#login-captcha-challenge");
+  if (!target) return;
+  if (!challenge?.enabled) {
+    target.classList.add("hidden");
+    target.removeAttribute("data-login-captcha-provider");
+    target.innerHTML = "";
+    return;
+  }
+  const provider = challenge.provider || "";
+  target.classList.remove("hidden");
+  target.dataset.loginCaptchaProvider = provider;
+  target.innerHTML = loginCaptchaChallengeHtml(provider, challenge.publicParams || {});
+  initializeLoginCaptchaChallenge(provider, challenge.publicParams || {});
+}
+
+function loginCaptchaChallengeHtml(provider, publicParams) {
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) {
+    return loginCaptchaScriptHookHtml(provider, publicParams);
+  }
+  const label = CAPTCHA_PROVIDER_LABELS[provider] || provider || "CAPTCHA";
+  return '<div class="login-captcha-card" data-login-captcha-provider="' + escapeAttribute(provider) + '">' +
+    '<div><strong>' + escapeText(label) + '</strong><p class="muted">' + escapeText(loginCaptchaProviderHint(provider)) + '</p></div>' +
+    loginCaptchaScriptHookHtml(provider, publicParams) +
+    '</div>';
+}
+
+function loginCaptchaProviderHint(provider) {
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) return "请完成页面中的验证码后再登录。";
+  return "请完成服务商验证后再登录。";
+}
+
+function loginCaptchaScriptHookHtml(provider, publicParams) {
+  return '<div class="login-captcha-script-hook" data-login-captcha-script-hook="' + escapeAttribute(provider) + '"' +
+    loginCaptchaPublicParamAttributes(publicParams) + '></div>';
+}
+
+function loginCaptchaPublicParamAttributes(publicParams) {
+  return Object.entries(publicParams || {}).map(([key, value]) => (
+    ' data-public-param-' + escapeAttribute(key) + '="' + escapeAttribute(String(value ?? "")) + '"'
+  )).join("");
+}
+
+function initializeLoginCaptchaChallenge(provider, publicParams) {
+  resetLoginCaptchaResponse();
+  const hook = optional("[data-login-captcha-script-hook]");
+  if (!hook) return;
+  if (!BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) {
+    renderAdvancedLoginCaptchaNotice(hook);
+    return;
+  }
+  hook.textContent = "正在加载验证码...";
+  loadLoginCaptchaScript(provider)
+    .then(() => renderBasicLoginCaptchaWidget(provider, publicParams, hook))
+    .catch((error) => {
+      hook.innerHTML = '<div class="login-captcha-card warning">验证码脚本加载失败：' + escapeText(error.message) + '</div>';
+    });
+}
+
+function resetLoginCaptchaResponse() {
+  state.loginCaptchaResponse = { token: "", payload: null };
+}
+
+function loadLoginCaptchaScript(provider) {
+  const src = BASIC_LOGIN_CAPTCHA_SCRIPT_URLS[provider];
+  if (!src) return Promise.reject(new Error("不支持的 CAPTCHA 服务商"));
+  const scriptId = "login-captcha-script-" + provider;
+  const existing = document.querySelector("#" + scriptId);
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  if (existing?.dataset.loading === "true") return waitForLoginCaptchaScript(existing);
+  const script = document.createElement("script");
+  script.id = scriptId;
+  script.src = src;
+  script.async = true;
+  script.defer = true;
+  script.dataset.loading = "true";
+  document.head.appendChild(script);
+  return waitForLoginCaptchaScript(script);
+}
+
+function waitForLoginCaptchaScript(script) {
+  return new Promise((resolve, reject) => {
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      script.dataset.loading = "false";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("请检查网络或页面 CSP 配置")), { once: true });
+  });
+}
+
+function renderBasicLoginCaptchaWidget(provider, publicParams, hook) {
+  const siteKey = String(publicParams.siteKey || "").trim();
+  if (!siteKey) {
+    hook.innerHTML = '<div class="login-captcha-card warning">验证码缺少 Site Key，请先在后台 CAPTCHA 设置中保存。</div>';
+    return;
+  }
+  hook.innerHTML = "";
+  const renderer = basicLoginCaptchaRenderer(provider);
+  if (!renderer) {
+    hook.innerHTML = '<div class="login-captcha-card warning">验证码服务商脚本未就绪。</div>';
+    return;
+  }
+  renderer(hook, siteKey);
+}
+
+function basicLoginCaptchaRenderer(provider) {
+  if (provider === "cloudflare_turnstile" && window.turnstile?.render) {
+    return (hook, siteKey) => window.turnstile.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  if (provider === "hcaptcha" && window.hcaptcha?.render) {
+    return (hook, siteKey) => window.hcaptcha.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  if (provider === "google_recaptcha" && window.grecaptcha?.render) {
+    return (hook, siteKey) => window.grecaptcha.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  return null;
+}
+
+function basicLoginCaptchaOptions(siteKey) {
+  return {
+    sitekey: siteKey,
+    callback: (token) => {
+      state.loginCaptchaResponse.token = String(token || "").trim();
+    },
+    "expired-callback": resetLoginCaptchaResponse,
+    "error-callback": resetLoginCaptchaResponse
+  };
+}
+
+function renderAdvancedLoginCaptchaNotice(hook) {
+  hook.innerHTML = '<div class="muted" style="padding:10px 12px">该服务商需要完成外部 CAPTCHA 验证后登录。</div>';
+}
+
+function loginCaptchaRequestFields() {
+  const challenge = state.loginCaptchaChallenge;
+  if (!challenge?.enabled) return {};
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(challenge.provider)) {
+    const token = state.loginCaptchaResponse.token || readMockCaptchaToken();
+    return token ? { captchaToken: token } : {};
+  }
+  const payload = state.loginCaptchaResponse.payload || readMockCaptchaPayload(challenge.provider);
+  return payload ? { captchaPayload: payload } : {};
+}
+
+function readMockCaptchaToken() {
+  const mock = window.__NETFLIX_MAIL_CAPTCHA_RESPONSE__;
+  if (typeof mock === "string") return mock.trim();
+  if (mock && typeof mock === "object" && !Array.isArray(mock) && typeof mock.token === "string") {
+    return mock.token.trim();
+  }
+  return "";
+}
+
+function readMockCaptchaPayload(provider) {
+  const mock = window.__NETFLIX_MAIL_CAPTCHA_RESPONSE__;
+  if (!mock || typeof mock !== "object" || Array.isArray(mock)) return null;
+  const candidate = mock.payload && typeof mock.payload === "object" && !Array.isArray(mock.payload)
+    ? mock.payload
+    : mock;
+  const keys = ADVANCED_LOGIN_CAPTCHA_PAYLOAD_KEYS[provider] || [];
+  return keys.every((key) => typeof candidate[key] === "string" && candidate[key].trim()) ? candidate : null;
 }
 
 on("#login-form", "submit", async (event) => {
   event.preventDefault();
   loginMessage.textContent = "";
   loginMessage.className = "muted";
-  const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const body = {
+    ...Object.fromEntries(new FormData(event.currentTarget).entries()),
+    ...loginCaptchaRequestFields()
+  };
   try {
     const data = await api("/api/admin/login", { method: "POST", body: JSON.stringify(body) });
     showApp(data.admin);
@@ -9410,6 +10059,9 @@ on("#email-page-size", "change", async (event) => {
 on("#open-rule-form", "click", () => openRuleForm());
 on("#open-link-form", "click", () => openLinkForm());
 on("#upgrade-database", "click", () => upgradeDatabase());
+on("#captcha-settings-form", "submit", submitCaptchaSettingsForm);
+on("#captcha-provider", "change", syncCaptchaProviderPanels);
+on("#captcha-enabled", "change", syncCaptchaEnabledUi);
 on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
 on("#rule-builder-add-condition", "click", () => addRuleBuilderChild("condition"));
@@ -9433,6 +10085,7 @@ async function loadCurrentPage() {
   }
   if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
   if (currentPage === "database") await loadDatabaseStatus();
+  if (currentPage === "captcha") await loadCaptchaSettings();
   if (currentPage === "mail") {
     ensureMailRefreshController();
     await loadEmails();
@@ -10505,6 +11158,86 @@ function renderDatabaseStatus(data) {
     '需要的数据库版本: <strong>' + escapeText(data.requiredDatabaseVersion) + '</strong>' +
     '</div>';
 }
+
+async function loadCaptchaSettings() {
+  const data = await api("/api/admin/captcha/settings");
+  state.captchaSettings = data.captcha;
+  populateCaptchaSettings(data.captcha);
+}
+function populateCaptchaSettings(settings) {
+  const form = optional("#captcha-settings-form");
+  if (!form || !settings) return;
+  form.elements.enabled.checked = Boolean(settings.enabled);
+  form.elements.provider.value = settings.provider || "cloudflare_turnstile";
+  clearCaptchaInputs(form);
+  fillCaptchaInputs(form, "public", settings.publicParams || {});
+  syncCaptchaProviderPanels();
+  syncCaptchaEnabledUi();
+  updateCaptchaStatus(settings);
+  optional("#captcha-message").textContent = "";
+}
+function clearCaptchaInputs(form) {
+  form.querySelectorAll("[data-captcha-key]").forEach((input) => { input.value = ""; });
+}
+function fillCaptchaInputs(form, scope, params) {
+  Object.entries(params).forEach(([key, value]) => {
+    const input = form.querySelector('[data-captcha-scope="' + scope + '"][data-captcha-key="' + cssEscapeAttribute(key) + '"]');
+    if (input) input.value = typeof value === "string" ? value : String(value ?? "");
+  });
+}
+function updateCaptchaStatus(settings) {
+  const status = optional("#captcha-status");
+  if (!status || !settings) return;
+  status.className = settings.enabled ? "badge success" : "badge muted-badge";
+  const label = CAPTCHA_PROVIDER_LABELS[settings.provider] || settings.provider || "未选择";
+  status.textContent = settings.enabled ? "已启用 · " + label : "已禁用";
+}
+function syncCaptchaProviderPanels() {
+  const provider = optional("#captcha-provider")?.value || "cloudflare_turnstile";
+  document.querySelectorAll("[data-captcha-provider-panel]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.captchaProviderPanel !== provider);
+  });
+}
+function syncCaptchaEnabledUi() {
+  const enabled = Boolean(optional("#captcha-enabled")?.checked);
+  const provider = optional("#captcha-provider");
+  const submit = optional("#captcha-submit");
+  if (provider) provider.disabled = false;
+  if (submit) submit.textContent = enabled ? "保存并启用" : "保存禁用状态";
+}
+async function submitCaptchaSettingsForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const enabled = Boolean(form.elements.enabled.checked);
+  const body = enabled ? enabledCaptchaSettingsBody(form) : { enabled: false };
+  const message = optional("#captcha-message");
+  if (message) message.textContent = "正在保存...";
+  try {
+    const data = await api("/api/admin/captcha/settings", { method: "PATCH", body: JSON.stringify(body) });
+    state.captchaSettings = data.captcha;
+    populateCaptchaSettings(data.captcha);
+    if (message) message.textContent = "已保存";
+  } catch (error) {
+    if (message) message.textContent = error.message;
+  }
+}
+function enabledCaptchaSettingsBody(form) {
+  const provider = form.elements.provider.value;
+  const keys = CAPTCHA_PARAM_KEYS[provider];
+  return {
+    enabled: true,
+    provider,
+    publicParams: collectCaptchaParams(form, provider, "public", keys?.public || []),
+    secretParams: collectCaptchaParams(form, provider, "secret", keys?.secret || [])
+  };
+}
+function collectCaptchaParams(form, provider, scope, keys) {
+  return Object.fromEntries(keys.map((key) => {
+    const selector = '[data-captcha-provider-panel="' + provider + '"] [data-captcha-scope="' + scope + '"][data-captcha-key="' + key + '"]';
+    return [key, String(form.querySelector(selector)?.value || "").trim()];
+  }));
+}
+
 function showDialog(id) {
   const dialog = optional("#" + id);
   if (!dialog) return;
@@ -10595,11 +11328,13 @@ var SHIELD_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3
 var LINK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" stroke-width="2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" stroke-width="2"/></svg>`;
 var RULE_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M7 12h10M10 19h4" stroke-width="2" stroke-linecap="round"/></svg>`;
 var DB_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="5" rx="7" ry="3" stroke-width="2"/><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" stroke-width="2"/><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" stroke-width="2"/></svg>`;
+var CAPTCHA_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="M9 12h6M12 9v6" stroke-width="2" stroke-linecap="round"/></svg>`;
 var TITLES = {
   mail: "\u90AE\u4EF6\u4E2D\u5FC3",
   rules: "\u89C4\u5219\u7BA1\u7406",
   share: "\u5206\u4EAB\u94FE\u63A5",
-  database: "\u6570\u636E\u5E93\u7BA1\u7406"
+  database: "\u6570\u636E\u5E93\u7BA1\u7406",
+  captcha: "\u767B\u5F55 CAPTCHA"
 };
 function adminBody(section) {
   return String.raw`
@@ -10613,6 +11348,7 @@ ${loginSection()}
       ${navItem("rules", section, "/admin/rules", RULE_ICON, "\u89C4\u5219\u7BA1\u7406")}
       ${navItem("share", section, "/admin/share-links", LINK_ICON, "\u5206\u4EAB\u94FE\u63A5")}
       ${navItem("database", section, "/admin/database", DB_ICON, "\u6570\u636E\u5E93\u7BA1\u7406")}
+      ${navItem("captcha", section, "/admin/captcha", CAPTCHA_ICON, "\u767B\u5F55 CAPTCHA")}
     </nav>
     <div class="sidebar-footer">
       <div class="inline-status"><span class="status-dot"></span><span>系统运行正常</span></div>
@@ -10649,6 +11385,7 @@ function loginSection() {
     <form id="login-form">
       <label>用户名</label><input name="username" autocomplete="username" placeholder="请输入用户名" required>
       <label>密码</label><input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+      <div id="login-captcha-challenge" class="login-captcha-challenge hidden" aria-live="polite"></div>
       <div class="form-actions"><button type="submit">登录后台</button><span id="login-message" class="muted"></span></div>
     </form>
   </div>
@@ -10664,6 +11401,7 @@ function moduleContent(section) {
   if (section === "rules") return rulesSection();
   if (section === "share") return shareSection();
   if (section === "database") return databaseSection();
+  if (section === "captcha") return captchaSection();
   return mailSection();
 }
 __name(moduleContent, "moduleContent");
@@ -10745,6 +11483,54 @@ function databaseSection() {
 </section>`;
 }
 __name(databaseSection, "databaseSection");
+function captchaSection() {
+  return String.raw`<section id="captcha-center" class="captcha-settings-shell">
+  <div class="card-header">
+    <div class="card-title"><p class="page-kicker">Login CAPTCHA</p><h1>登录 CAPTCHA 设置</h1><p class="muted">选择登录验证服务商，并配置公开参数与服务端密钥。保存禁用状态不会清空已存参数。</p></div>
+    <span id="captcha-status" class="badge muted-badge">未加载</span>
+  </div>
+  <form id="captcha-settings-form" class="captcha-settings-form">
+    <label class="checkbox-pill captcha-enable-control"><input id="captcha-enabled" name="enabled" type="checkbox"> 启用管理员登录 CAPTCHA</label>
+    <div class="rule-grid captcha-provider-grid">
+      <label><span>服务商</span><select id="captcha-provider" name="provider">
+        <option value="cloudflare_turnstile">Cloudflare Turnstile</option>
+        <option value="hcaptcha">hCaptcha</option>
+        <option value="google_recaptcha">Google reCAPTCHA</option>
+        <option value="tencent_cloud_captcha">Tencent Cloud CAPTCHA</option>
+        <option value="alibaba_cloud_captcha_2">Alibaba Cloud CAPTCHA 2.0</option>
+        <option value="geetest_captcha">GeeTest CAPTCHA</option>
+      </select></label>
+    </div>
+    <div class="captcha-parameter-card">
+      <h2>参数</h2>
+      <p class="muted">公开参数会返回给前端登录页；密钥仅用于服务端校验，读取时不会回显原值。</p>
+      ${captchaProviderPanels()}
+    </div>
+    <div class="form-actions"><button id="captcha-submit" type="submit">保存设置</button><span id="captcha-message" class="muted" role="status" aria-live="polite"></span></div>
+  </form>
+</section>`;
+}
+__name(captchaSection, "captchaSection");
+function captchaProviderPanels() {
+  return [
+    captchaProviderPanel("cloudflare_turnstile", "Cloudflare Turnstile", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("hcaptcha", "hCaptcha", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("google_recaptcha", "Google reCAPTCHA", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("tencent_cloud_captcha", "Tencent Cloud CAPTCHA", [captchaInput("public", "captchaAppId", "CaptchaAppId"), captchaInput("public", "appId", "AppId"), captchaInput("secret", "secretId", "SecretId", "password"), captchaInput("secret", "secretKey", "SecretKey", "password")]),
+    captchaProviderPanel("alibaba_cloud_captcha_2", "Alibaba Cloud CAPTCHA 2.0", [captchaInput("public", "captchaId", "CaptchaId"), captchaInput("public", "sceneId", "SceneId"), captchaInput("public", "prefix", "Prefix"), captchaInput("secret", "accessKeyId", "AccessKeyId", "password"), captchaInput("secret", "accessKeySecret", "AccessKeySecret", "password")]),
+    captchaProviderPanel("geetest_captcha", "GeeTest CAPTCHA", [captchaInput("public", "captchaId", "CaptchaId"), captchaInput("secret", "captchaKey", "CaptchaKey", "password")])
+  ].join("");
+}
+__name(captchaProviderPanels, "captchaProviderPanels");
+function captchaProviderPanel(provider, title, inputs) {
+  return `<fieldset class="captcha-provider-panel hidden" data-captcha-provider-panel="${provider}"><legend>${title}</legend><div class="rule-grid">${inputs.join("")}</div></fieldset>`;
+}
+__name(captchaProviderPanel, "captchaProviderPanel");
+function captchaInput(scope, key, label, type = "text") {
+  const secretHint = scope === "secret" ? '<span class="muted">\u8BFB\u53D6\u65F6\u4E0D\u56DE\u663E\uFF0C\u66F4\u65B0\u542F\u7528\u72B6\u6001\u9700\u91CD\u65B0\u586B\u5199\u3002</span>' : "";
+  return `<label><span>${label}</span><input type="${type}" data-captcha-scope="${scope}" data-captcha-key="${key}" autocomplete="off" placeholder="${key}">${secretHint}</label>`;
+}
+__name(captchaInput, "captchaInput");
 function ruleForm() {
   return String.raw`<dialog id="rule-dialog" class="modal-card" aria-labelledby="rule-form-title">
 <form id="rule-form" class="modal-form rule-dialog-form">
@@ -11133,6 +11919,7 @@ function registerPageRoutes(app2) {
   app2.get("/admin/rules", (c) => c.html(adminPage("rules")));
   app2.get("/admin/share-links", (c) => c.html(adminPage("share")));
   app2.get("/admin/database", (c) => c.html(adminPage("database")));
+  app2.get("/admin/captcha", (c) => c.html(adminPage("captcha")));
   app2.get("/setup", (c) => c.html(setupPage()));
   app2.get("/v/:token", (c) => c.html(visitorPage(c.req.param("token"))));
 }

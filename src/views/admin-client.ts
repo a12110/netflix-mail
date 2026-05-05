@@ -28,7 +28,8 @@ const state = {
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0,
   captchaSettings: null,
-  loginCaptchaChallenge: null
+  loginCaptchaChallenge: null,
+  loginCaptchaResponse: { token: "", payload: null }
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
 const RULE_FIELD_OPTIONS = ["from", "to", "subject", "text", "html", "code"];
@@ -52,6 +53,11 @@ const CAPTCHA_PARAM_KEYS = {
   geetest_captcha: { public: ["captchaId"], secret: ["captchaKey"] }
 };
 const BASIC_LOGIN_CAPTCHA_PROVIDERS = ["cloudflare_turnstile", "hcaptcha", "google_recaptcha"];
+const BASIC_LOGIN_CAPTCHA_SCRIPT_URLS = {
+  cloudflare_turnstile: "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit",
+  hcaptcha: "https://js.hcaptcha.com/1/api.js?render=explicit",
+  google_recaptcha: "https://www.google.com/recaptcha/api.js?render=explicit"
+};
 const ADVANCED_LOGIN_CAPTCHA_PAYLOAD_KEYS = {
   tencent_cloud_captcha: ["ticket", "randstr"],
   alibaba_cloud_captcha_2: ["captchaVerifyParam"],
@@ -118,14 +124,17 @@ function renderLoginCaptchaChallenge(challenge) {
   target.classList.remove("hidden");
   target.dataset.loginCaptchaProvider = provider;
   target.innerHTML = loginCaptchaChallengeHtml(provider, challenge.publicParams || {});
+  initializeLoginCaptchaChallenge(provider, challenge.publicParams || {});
 }
 
 function loginCaptchaChallengeHtml(provider, publicParams) {
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) {
+    return loginCaptchaScriptHookHtml(provider, publicParams);
+  }
   const label = CAPTCHA_PROVIDER_LABELS[provider] || provider || "CAPTCHA";
   return '<div class="login-captcha-card" data-login-captcha-provider="' + escapeAttribute(provider) + '">' +
     '<div><strong>' + escapeText(label) + '</strong><p class="muted">' + escapeText(loginCaptchaProviderHint(provider)) + '</p></div>' +
-    '<div class="login-captcha-script-hook" data-login-captcha-script-hook="' + escapeAttribute(provider) + '"' +
-    loginCaptchaPublicParamAttributes(publicParams) + '></div>' +
+    loginCaptchaScriptHookHtml(provider, publicParams) +
     '</div>';
 }
 
@@ -134,20 +143,116 @@ function loginCaptchaProviderHint(provider) {
   return "请完成服务商验证后再登录。";
 }
 
+function loginCaptchaScriptHookHtml(provider, publicParams) {
+  return '<div class="login-captcha-script-hook" data-login-captcha-script-hook="' + escapeAttribute(provider) + '"' +
+    loginCaptchaPublicParamAttributes(publicParams) + '></div>';
+}
+
 function loginCaptchaPublicParamAttributes(publicParams) {
   return Object.entries(publicParams || {}).map(([key, value]) => (
     ' data-public-param-' + escapeAttribute(key) + '="' + escapeAttribute(String(value ?? "")) + '"'
   )).join("");
 }
 
+function initializeLoginCaptchaChallenge(provider, publicParams) {
+  resetLoginCaptchaResponse();
+  const hook = optional("[data-login-captcha-script-hook]");
+  if (!hook) return;
+  if (!BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) {
+    renderAdvancedLoginCaptchaNotice(hook);
+    return;
+  }
+  hook.textContent = "正在加载验证码...";
+  loadLoginCaptchaScript(provider)
+    .then(() => renderBasicLoginCaptchaWidget(provider, publicParams, hook))
+    .catch((error) => {
+      hook.innerHTML = '<div class="login-captcha-card warning">验证码脚本加载失败：' + escapeText(error.message) + '</div>';
+    });
+}
+
+function resetLoginCaptchaResponse() {
+  state.loginCaptchaResponse = { token: "", payload: null };
+}
+
+function loadLoginCaptchaScript(provider) {
+  const src = BASIC_LOGIN_CAPTCHA_SCRIPT_URLS[provider];
+  if (!src) return Promise.reject(new Error("不支持的 CAPTCHA 服务商"));
+  const scriptId = "login-captcha-script-" + provider;
+  const existing = document.querySelector("#" + scriptId);
+  if (existing?.dataset.loaded === "true") return Promise.resolve();
+  if (existing?.dataset.loading === "true") return waitForLoginCaptchaScript(existing);
+  const script = document.createElement("script");
+  script.id = scriptId;
+  script.src = src;
+  script.async = true;
+  script.defer = true;
+  script.dataset.loading = "true";
+  document.head.appendChild(script);
+  return waitForLoginCaptchaScript(script);
+}
+
+function waitForLoginCaptchaScript(script) {
+  return new Promise((resolve, reject) => {
+    script.addEventListener("load", () => {
+      script.dataset.loaded = "true";
+      script.dataset.loading = "false";
+      resolve();
+    }, { once: true });
+    script.addEventListener("error", () => reject(new Error("请检查网络或页面 CSP 配置")), { once: true });
+  });
+}
+
+function renderBasicLoginCaptchaWidget(provider, publicParams, hook) {
+  const siteKey = String(publicParams.siteKey || "").trim();
+  if (!siteKey) {
+    hook.innerHTML = '<div class="login-captcha-card warning">验证码缺少 Site Key，请先在后台 CAPTCHA 设置中保存。</div>';
+    return;
+  }
+  hook.innerHTML = "";
+  const renderer = basicLoginCaptchaRenderer(provider);
+  if (!renderer) {
+    hook.innerHTML = '<div class="login-captcha-card warning">验证码服务商脚本未就绪。</div>';
+    return;
+  }
+  renderer(hook, siteKey);
+}
+
+function basicLoginCaptchaRenderer(provider) {
+  if (provider === "cloudflare_turnstile" && window.turnstile?.render) {
+    return (hook, siteKey) => window.turnstile.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  if (provider === "hcaptcha" && window.hcaptcha?.render) {
+    return (hook, siteKey) => window.hcaptcha.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  if (provider === "google_recaptcha" && window.grecaptcha?.render) {
+    return (hook, siteKey) => window.grecaptcha.render(hook, basicLoginCaptchaOptions(siteKey));
+  }
+  return null;
+}
+
+function basicLoginCaptchaOptions(siteKey) {
+  return {
+    sitekey: siteKey,
+    callback: (token) => {
+      state.loginCaptchaResponse.token = String(token || "").trim();
+    },
+    "expired-callback": resetLoginCaptchaResponse,
+    "error-callback": resetLoginCaptchaResponse
+  };
+}
+
+function renderAdvancedLoginCaptchaNotice(hook) {
+  hook.innerHTML = '<div class="muted" style="padding:10px 12px">该服务商需要完成外部 CAPTCHA 验证后登录。</div>';
+}
+
 function loginCaptchaRequestFields() {
   const challenge = state.loginCaptchaChallenge;
   if (!challenge?.enabled) return {};
   if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(challenge.provider)) {
-    const token = readMockCaptchaToken();
+    const token = state.loginCaptchaResponse.token || readMockCaptchaToken();
     return token ? { captchaToken: token } : {};
   }
-  const payload = readMockCaptchaPayload(challenge.provider);
+  const payload = state.loginCaptchaResponse.payload || readMockCaptchaPayload(challenge.provider);
   return payload ? { captchaPayload: payload } : {};
 }
 
