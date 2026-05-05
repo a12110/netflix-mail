@@ -26,13 +26,30 @@ const state = {
   ruleBuilderPendingPointer: null,
   ruleBuilderMoveFrame: 0,
   ruleBuilderJsonDirty: false,
-  ruleBuilderCounter: 0
+  ruleBuilderCounter: 0,
+  captchaSettings: null
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
 const RULE_FIELD_OPTIONS = ["from", "to", "subject", "text", "html", "code"];
 const RULE_OPERATOR_OPTIONS = ["contains", "exact", "startsWith", "endsWith", "regex"];
 const RULE_FIELD_LABELS = { from: "From", to: "To", subject: "Subject", text: "Text", html: "HTML", code: "Code" };
 const RULE_OPERATOR_LABELS = { contains: "包含", exact: "完全相等", startsWith: "开头匹配", endsWith: "结尾匹配", regex: "正则" };
+const CAPTCHA_PROVIDER_LABELS = {
+  cloudflare_turnstile: "Cloudflare Turnstile",
+  hcaptcha: "hCaptcha",
+  google_recaptcha: "Google reCAPTCHA",
+  tencent_cloud_captcha: "Tencent Cloud CAPTCHA",
+  alibaba_cloud_captcha_2: "Alibaba Cloud CAPTCHA 2.0",
+  geetest_captcha: "GeeTest CAPTCHA"
+};
+const CAPTCHA_PARAM_KEYS = {
+  cloudflare_turnstile: { public: ["siteKey"], secret: ["secretKey"] },
+  hcaptcha: { public: ["siteKey"], secret: ["secretKey"] },
+  google_recaptcha: { public: ["siteKey"], secret: ["secretKey"] },
+  tencent_cloud_captcha: { public: ["captchaAppId", "appId"], secret: ["secretId", "secretKey"] },
+  alibaba_cloud_captcha_2: { public: ["captchaId", "sceneId", "prefix"], secret: ["accessKeyId", "accessKeySecret"] },
+  geetest_captcha: { public: ["captchaId"], secret: ["captchaKey"] }
+};
 const currentPage = "__ADMIN_SECTION__";
 const authLoading = document.querySelector("#auth-loading");
 const loginSection = document.querySelector("#login-section");
@@ -98,6 +115,9 @@ on("#email-page-size", "change", async (event) => {
 on("#open-rule-form", "click", () => openRuleForm());
 on("#open-link-form", "click", () => openLinkForm());
 on("#upgrade-database", "click", () => upgradeDatabase());
+on("#captcha-settings-form", "submit", submitCaptchaSettingsForm);
+on("#captcha-provider", "change", syncCaptchaProviderPanels);
+on("#captcha-enabled", "change", syncCaptchaEnabledUi);
 on("#rule-form", "submit", submitRuleForm);
 on("#link-form", "submit", submitLinkForm);
 on("#rule-builder-add-condition", "click", () => addRuleBuilderChild("condition"));
@@ -121,6 +141,7 @@ async function loadCurrentPage() {
   }
   if (currentPage === "share") await Promise.all([loadRules(), loadLinks()]);
   if (currentPage === "database") await loadDatabaseStatus();
+  if (currentPage === "captcha") await loadCaptchaSettings();
   if (currentPage === "mail") {
     ensureMailRefreshController();
     await loadEmails();
@@ -1193,6 +1214,86 @@ function renderDatabaseStatus(data) {
     '需要的数据库版本: <strong>' + escapeText(data.requiredDatabaseVersion) + '</strong>' +
     '</div>';
 }
+
+async function loadCaptchaSettings() {
+  const data = await api("/api/admin/captcha/settings");
+  state.captchaSettings = data.captcha;
+  populateCaptchaSettings(data.captcha);
+}
+function populateCaptchaSettings(settings) {
+  const form = optional("#captcha-settings-form");
+  if (!form || !settings) return;
+  form.elements.enabled.checked = Boolean(settings.enabled);
+  form.elements.provider.value = settings.provider || "cloudflare_turnstile";
+  clearCaptchaInputs(form);
+  fillCaptchaInputs(form, "public", settings.publicParams || {});
+  syncCaptchaProviderPanels();
+  syncCaptchaEnabledUi();
+  updateCaptchaStatus(settings);
+  optional("#captcha-message").textContent = "";
+}
+function clearCaptchaInputs(form) {
+  form.querySelectorAll("[data-captcha-key]").forEach((input) => { input.value = ""; });
+}
+function fillCaptchaInputs(form, scope, params) {
+  Object.entries(params).forEach(([key, value]) => {
+    const input = form.querySelector('[data-captcha-scope="' + scope + '"][data-captcha-key="' + cssEscapeAttribute(key) + '"]');
+    if (input) input.value = typeof value === "string" ? value : String(value ?? "");
+  });
+}
+function updateCaptchaStatus(settings) {
+  const status = optional("#captcha-status");
+  if (!status || !settings) return;
+  status.className = settings.enabled ? "badge success" : "badge muted-badge";
+  const label = CAPTCHA_PROVIDER_LABELS[settings.provider] || settings.provider || "未选择";
+  status.textContent = settings.enabled ? "已启用 · " + label : "已禁用";
+}
+function syncCaptchaProviderPanels() {
+  const provider = optional("#captcha-provider")?.value || "cloudflare_turnstile";
+  document.querySelectorAll("[data-captcha-provider-panel]").forEach((panel) => {
+    panel.classList.toggle("hidden", panel.dataset.captchaProviderPanel !== provider);
+  });
+}
+function syncCaptchaEnabledUi() {
+  const enabled = Boolean(optional("#captcha-enabled")?.checked);
+  const provider = optional("#captcha-provider");
+  const submit = optional("#captcha-submit");
+  if (provider) provider.disabled = false;
+  if (submit) submit.textContent = enabled ? "保存并启用" : "保存禁用状态";
+}
+async function submitCaptchaSettingsForm(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const enabled = Boolean(form.elements.enabled.checked);
+  const body = enabled ? enabledCaptchaSettingsBody(form) : { enabled: false };
+  const message = optional("#captcha-message");
+  if (message) message.textContent = "正在保存...";
+  try {
+    const data = await api("/api/admin/captcha/settings", { method: "PATCH", body: JSON.stringify(body) });
+    state.captchaSettings = data.captcha;
+    populateCaptchaSettings(data.captcha);
+    if (message) message.textContent = "已保存";
+  } catch (error) {
+    if (message) message.textContent = error.message;
+  }
+}
+function enabledCaptchaSettingsBody(form) {
+  const provider = form.elements.provider.value;
+  const keys = CAPTCHA_PARAM_KEYS[provider];
+  return {
+    enabled: true,
+    provider,
+    publicParams: collectCaptchaParams(form, provider, "public", keys?.public || []),
+    secretParams: collectCaptchaParams(form, provider, "secret", keys?.secret || [])
+  };
+}
+function collectCaptchaParams(form, provider, scope, keys) {
+  return Object.fromEntries(keys.map((key) => {
+    const selector = '[data-captcha-provider-panel="' + provider + '"] [data-captcha-scope="' + scope + '"][data-captcha-key="' + key + '"]';
+    return [key, String(form.querySelector(selector)?.value || "").trim()];
+  }));
+}
+
 function showDialog(id) {
   const dialog = optional("#" + id);
   if (!dialog) return;

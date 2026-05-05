@@ -114,7 +114,7 @@
       "Switch between providers in the browser and verify only the selected provider parameter fields are visible."
     ],
     "budget_minutes": 10,
-    "passes": false
+    "passes": true
   },
   {
     "task_type": "e2e",

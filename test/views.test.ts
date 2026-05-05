@@ -24,6 +24,7 @@ describe("view templates", () => {
       'href="/admin/rules"',
       'href="/admin/share-links"',
       'href="/admin/database"',
+      'href="/admin/captcha"',
       'class="mail-frame"',
       '高级信息'
     ].forEach((fragment) => expect(html).toContain(fragment));
@@ -31,12 +32,14 @@ describe("view templates", () => {
     expect(html).not.toContain('href="/setup"');
     expect(html).not.toContain('id="rule-form"');
     expect(html).not.toContain('id="link-form"');
+    expect(html).not.toContain('id="captcha-settings-form"');
   });
 
   it("renders rules and share modules on separate admin pages", () => {
     const rulesHtml = adminPage("rules");
     const shareHtml = adminPage("share");
     const databaseHtml = adminPage("database");
+    const captchaHtml = adminPage("captcha");
 
     expect(rulesHtml).toContain('id="rule-form"');
     expect(rulesHtml).toContain('name="action"');
@@ -120,6 +123,23 @@ describe("view templates", () => {
     expect(databaseHtml).not.toContain('id="rule-form"');
     expect(databaseHtml).not.toContain('id="link-form"');
     expect(databaseHtml).not.toContain('id="search-form"');
+
+    expect(captchaHtml).toContain('id="captcha-settings-form"');
+    expect(captchaHtml).toContain('id="captcha-enabled"');
+    expect(captchaHtml).toContain('id="captcha-provider"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="cloudflare_turnstile"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="hcaptcha"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="google_recaptcha"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="tencent_cloud_captcha"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="alibaba_cloud_captcha_2"');
+    expect(captchaHtml).toContain('data-captcha-provider-panel="geetest_captcha"');
+    expect(captchaHtml).toContain('data-captcha-key="siteKey"');
+    expect(captchaHtml).toContain('data-captcha-key="captchaAppId"');
+    expect(captchaHtml).toContain('data-captcha-key="accessKeySecret"');
+    expect(captchaHtml).toContain('/api/admin/captcha/settings');
+    expect(captchaHtml).not.toContain('id="rule-form"');
+    expect(captchaHtml).not.toContain('id="link-form"');
+    expect(captchaHtml).not.toContain('id="search-form"');
   });
 
   it("keeps setup form hook and admin navigation", () => {

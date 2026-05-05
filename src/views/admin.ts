@@ -1,7 +1,7 @@
 import { page } from "./layout";
 import { adminScript } from "./admin-client";
 
-export type AdminSection = "mail" | "rules" | "share" | "database";
+export type AdminSection = "mail" | "rules" | "share" | "database" | "captcha";
 
 export function adminPage(section: AdminSection = "mail"): string {
   return page("管理员后台", adminBody(section), adminScript(section));
@@ -12,12 +12,14 @@ const SHIELD_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12
 const LINK_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1" stroke-width="2"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1" stroke-width="2"/></svg>`;
 const RULE_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M4 5h16M7 12h10M10 19h4" stroke-width="2" stroke-linecap="round"/></svg>`;
 const DB_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><ellipse cx="12" cy="5" rx="7" ry="3" stroke-width="2"/><path d="M5 5v6c0 1.7 3.1 3 7 3s7-1.3 7-3V5" stroke-width="2"/><path d="M5 11v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" stroke-width="2"/></svg>`;
+const CAPTCHA_ICON = String.raw`<svg viewBox="0 0 24 24" fill="none"><path d="M12 3 5 6v5c0 4.5 2.9 8.4 7 10 4.1-1.6 7-5.5 7-10V6z" stroke-width="2"/><path d="M9 12h6M12 9v6" stroke-width="2" stroke-linecap="round"/></svg>`;
 
 const TITLES: Record<AdminSection, string> = {
   mail: "邮件中心",
   rules: "规则管理",
   share: "分享链接",
-  database: "数据库管理"
+  database: "数据库管理",
+  captcha: "登录 CAPTCHA"
 };
 
 function adminBody(section: AdminSection): string {
@@ -32,6 +34,7 @@ ${loginSection()}
       ${navItem("rules", section, "/admin/rules", RULE_ICON, "规则管理")}
       ${navItem("share", section, "/admin/share-links", LINK_ICON, "分享链接")}
       ${navItem("database", section, "/admin/database", DB_ICON, "数据库管理")}
+      ${navItem("captcha", section, "/admin/captcha", CAPTCHA_ICON, "登录 CAPTCHA")}
     </nav>
     <div class="sidebar-footer">
       <div class="inline-status"><span class="status-dot"></span><span>系统运行正常</span></div>
@@ -83,6 +86,7 @@ function moduleContent(section: AdminSection): string {
   if (section === "rules") return rulesSection();
   if (section === "share") return shareSection();
   if (section === "database") return databaseSection();
+  if (section === "captcha") return captchaSection();
   return mailSection();
 }
 
@@ -162,6 +166,55 @@ function databaseSection(): string {
   <div id="database-message" class="muted" style="margin-bottom:12px"></div>
   <div id="database-status"></div>
 </section>`;
+}
+
+
+function captchaSection(): string {
+  return String.raw`<section id="captcha-center" class="captcha-settings-shell">
+  <div class="card-header">
+    <div class="card-title"><p class="page-kicker">Login CAPTCHA</p><h1>登录 CAPTCHA 设置</h1><p class="muted">选择登录验证服务商，并配置公开参数与服务端密钥。保存禁用状态不会清空已存参数。</p></div>
+    <span id="captcha-status" class="badge muted-badge">未加载</span>
+  </div>
+  <form id="captcha-settings-form" class="captcha-settings-form">
+    <label class="checkbox-pill captcha-enable-control"><input id="captcha-enabled" name="enabled" type="checkbox"> 启用管理员登录 CAPTCHA</label>
+    <div class="rule-grid captcha-provider-grid">
+      <label><span>服务商</span><select id="captcha-provider" name="provider">
+        <option value="cloudflare_turnstile">Cloudflare Turnstile</option>
+        <option value="hcaptcha">hCaptcha</option>
+        <option value="google_recaptcha">Google reCAPTCHA</option>
+        <option value="tencent_cloud_captcha">Tencent Cloud CAPTCHA</option>
+        <option value="alibaba_cloud_captcha_2">Alibaba Cloud CAPTCHA 2.0</option>
+        <option value="geetest_captcha">GeeTest CAPTCHA</option>
+      </select></label>
+    </div>
+    <div class="captcha-parameter-card">
+      <h2>参数</h2>
+      <p class="muted">公开参数会返回给前端登录页；密钥仅用于服务端校验，读取时不会回显原值。</p>
+      ${captchaProviderPanels()}
+    </div>
+    <div class="form-actions"><button id="captcha-submit" type="submit">保存设置</button><span id="captcha-message" class="muted" role="status" aria-live="polite"></span></div>
+  </form>
+</section>`;
+}
+
+function captchaProviderPanels(): string {
+  return [
+    captchaProviderPanel("cloudflare_turnstile", "Cloudflare Turnstile", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("hcaptcha", "hCaptcha", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("google_recaptcha", "Google reCAPTCHA", [captchaInput("public", "siteKey", "Site Key"), captchaInput("secret", "secretKey", "Secret Key", "password")]),
+    captchaProviderPanel("tencent_cloud_captcha", "Tencent Cloud CAPTCHA", [captchaInput("public", "captchaAppId", "CaptchaAppId"), captchaInput("public", "appId", "AppId"), captchaInput("secret", "secretId", "SecretId", "password"), captchaInput("secret", "secretKey", "SecretKey", "password")]),
+    captchaProviderPanel("alibaba_cloud_captcha_2", "Alibaba Cloud CAPTCHA 2.0", [captchaInput("public", "captchaId", "CaptchaId"), captchaInput("public", "sceneId", "SceneId"), captchaInput("public", "prefix", "Prefix"), captchaInput("secret", "accessKeyId", "AccessKeyId", "password"), captchaInput("secret", "accessKeySecret", "AccessKeySecret", "password")]),
+    captchaProviderPanel("geetest_captcha", "GeeTest CAPTCHA", [captchaInput("public", "captchaId", "CaptchaId"), captchaInput("secret", "captchaKey", "CaptchaKey", "password")])
+  ].join("");
+}
+
+function captchaProviderPanel(provider: string, title: string, inputs: string[]): string {
+  return `<fieldset class="captcha-provider-panel hidden" data-captcha-provider-panel="${provider}"><legend>${title}</legend><div class="rule-grid">${inputs.join("")}</div></fieldset>`;
+}
+
+function captchaInput(scope: "public" | "secret", key: string, label: string, type = "text"): string {
+  const secretHint = scope === "secret" ? '<span class="muted">读取时不回显，更新启用状态需重新填写。</span>' : "";
+  return `<label><span>${label}</span><input type="${type}" data-captcha-scope="${scope}" data-captcha-key="${key}" autocomplete="off" placeholder="${key}">${secretHint}</label>`;
 }
 
 function ruleForm(): string {
