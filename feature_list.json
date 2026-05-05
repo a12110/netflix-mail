@@ -127,6 +127,6 @@
       "Submit a browser login attempt without the CAPTCHA response while enabled and verify the UI shows the backend validation error."
     ],
     "budget_minutes": 10,
-    "passes": false
+    "passes": true
   }
 ]

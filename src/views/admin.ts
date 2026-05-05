@@ -71,6 +71,7 @@ function loginSection(): string {
     <form id="login-form">
       <label>用户名</label><input name="username" autocomplete="username" placeholder="请输入用户名" required>
       <label>密码</label><input name="password" type="password" autocomplete="current-password" placeholder="请输入密码" required>
+      <div id="login-captcha-challenge" class="login-captcha-challenge hidden" aria-live="polite"></div>
       <div class="form-actions"><button type="submit">登录后台</button><span id="login-message" class="muted"></span></div>
     </form>
   </div>

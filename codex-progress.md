@@ -1,14 +1,14 @@
 # Current Summary
 
-- Phase: CAPTCHA backend/API development complete; frontend/admin UI CAPTCHA tasks remain.
-- First pending task: Show an admin CAPTCHA settings page for choosing a provider and editing parameters.
+- Phase: CAPTCHA backend/API, admin settings UI, and login-page CAPTCHA e2e flow complete.
+- First pending task: none; `feature_list.json` queue is complete.
 - Recommended startup path: `AGENTS.md -> agent-state.md -> feature_list.json -> codex-progress.md`.
 - Active blockers: none.
 
 # Queue Snapshot
 
-- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read API; disabled CAPTCHA save API; all six provider settings validation and persistence; all six provider login CAPTCHA verification paths.
-- Pending next: admin settings UI and login UI tasks.
+- Completed: default-disabled CAPTCHA database persistence; public login CAPTCHA challenge API; authenticated admin CAPTCHA settings read/update APIs; all six provider settings validation and persistence; all six provider login CAPTCHA verification paths; admin settings UI; login-page CAPTCHA challenge flow.
+- Pending next: none.
 
 # Recent Entries
 
@@ -31,3 +31,5 @@
 - 2026-05-05 Worker 8: Completed backend task “Verify Tencent Cloud, Alibaba Cloud 2.0, and GeeTest CAPTCHA payloads before admin password authentication.” Added login-time verification request builders for `tencent_cloud_captcha`, `alibaba_cloud_captcha_2`, and `geetest_captcha` using saved server credentials, accepted provider-specific `captchaPayload` in `POST /api/admin/login`, rejected missing/failed CAPTCHA before password lookup, and verified successful CAPTCHA allows the existing password/session flow. Validation: `./init.sh`, targeted `yarn vitest run test/admin-login-captcha.test.ts test/admin-routes.test.ts test/database-captcha.test.ts`, and `yarn run check`.
 
 - 2026-05-05 Worker 9: Completed frontend task “Show an admin CAPTCHA settings page for choosing a provider and editing parameters.” Added `/admin/captcha` navigation and page rendering, built the admin settings form with enable switch, provider selector, and provider-specific public/secret parameter fields for all six supported providers, and wired the UI to `GET /api/admin/captcha/settings` plus `PATCH /api/admin/captcha/settings`. Validation: `./init.sh`, targeted `yarn vitest run test/views.test.ts test/admin-routes.test.ts test/database-captcha.test.ts`, `yarn run check`, and browser verification at `http://127.0.0.1:8787/admin/captcha` with default `已禁用` plus provider switching showing only the selected provider panel. Browser Use IAB backend was unavailable, so visible-flow verification used Playwright MCP instead of macOS `open`.
+
+- 2026-05-05 Worker 10: Completed e2e task “Connect the admin login page to the configured CAPTCHA challenge flow.” Added login-screen loading of `GET /api/admin/login/captcha`, rendered enabled provider challenge hooks with public params, kept the disabled form visually unchanged with no CAPTCHA submit fields, and wired deterministic mocked browser CAPTCHA responses into login submissions. Missing CAPTCHA responses now surface the backend validation error in the login UI. Validation: `./init.sh`, targeted `yarn vitest run test/views.test.ts test/admin-login-captcha.test.ts test/admin-routes.test.ts`, `yarn run check`, and Chrome headless CDP browser verification covering disabled submit, enabled hCaptcha hook render, mocked `captchaToken` submit payload, and missing-token UI error. Browser Use IAB was unavailable and Playwright MCP was profile-locked, so verification used Chrome headless CDP without macOS `open`; screenshot saved at `/private/tmp/netflix-mail-login-captcha-e2e.png`.

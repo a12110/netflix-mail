@@ -12,6 +12,7 @@ describe("view templates", () => {
       'id="login-section"',
       'id="app-section"',
       'id="auth-loading"',
+      'id="login-captcha-challenge"',
       'id="search-form"',
       'id="emails-table"',
       'id="email-detail"',
@@ -29,6 +30,9 @@ describe("view templates", () => {
       '高级信息'
     ].forEach((fragment) => expect(html).toContain(fragment));
     expect(html).toContain('id="login-section" class="hero-auth hidden"');
+    expect(html).toContain('/api/admin/login/captcha');
+    expect(html).toContain('data-login-captcha-script-hook');
+    expect(html).toContain('__NETFLIX_MAIL_CAPTCHA_RESPONSE__');
     expect(html).not.toContain('href="/setup"');
     expect(html).not.toContain('id="rule-form"');
     expect(html).not.toContain('id="link-form"');

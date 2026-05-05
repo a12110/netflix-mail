@@ -27,7 +27,8 @@ const state = {
   ruleBuilderMoveFrame: 0,
   ruleBuilderJsonDirty: false,
   ruleBuilderCounter: 0,
-  captchaSettings: null
+  captchaSettings: null,
+  loginCaptchaChallenge: null
 };
 const MAIL_AUTO_REFRESH_SECONDS = 60;
 const RULE_FIELD_OPTIONS = ["from", "to", "subject", "text", "html", "code"];
@@ -49,6 +50,12 @@ const CAPTCHA_PARAM_KEYS = {
   tencent_cloud_captcha: { public: ["captchaAppId", "appId"], secret: ["secretId", "secretKey"] },
   alibaba_cloud_captcha_2: { public: ["captchaId", "sceneId", "prefix"], secret: ["accessKeyId", "accessKeySecret"] },
   geetest_captcha: { public: ["captchaId"], secret: ["captchaKey"] }
+};
+const BASIC_LOGIN_CAPTCHA_PROVIDERS = ["cloudflare_turnstile", "hcaptcha", "google_recaptcha"];
+const ADVANCED_LOGIN_CAPTCHA_PAYLOAD_KEYS = {
+  tencent_cloud_captcha: ["ticket", "randstr"],
+  alibaba_cloud_captcha_2: ["captchaVerifyParam"],
+  geetest_captcha: ["captchaOutput", "lotNumber", "passToken", "genTime"]
 };
 const currentPage = "__ADMIN_SECTION__";
 const authLoading = document.querySelector("#auth-loading");
@@ -81,13 +88,96 @@ function showLogin() {
   logoutButton.classList.add("hidden");
   adminName.textContent = "";
   stopMailRefreshController();
+  void loadLoginCaptchaChallenge();
+}
+
+async function loadLoginCaptchaChallenge() {
+  const target = optional("#login-captcha-challenge");
+  if (!target) return;
+  try {
+    const data = await api("/api/admin/login/captcha");
+    state.loginCaptchaChallenge = data.captcha || { enabled: false };
+    renderLoginCaptchaChallenge(state.loginCaptchaChallenge);
+  } catch (error) {
+    state.loginCaptchaChallenge = null;
+    target.classList.remove("hidden");
+    target.innerHTML = '<div class="login-captcha-card warning">CAPTCHA 状态加载失败：' + escapeText(error.message) + '</div>';
+  }
+}
+
+function renderLoginCaptchaChallenge(challenge) {
+  const target = optional("#login-captcha-challenge");
+  if (!target) return;
+  if (!challenge?.enabled) {
+    target.classList.add("hidden");
+    target.removeAttribute("data-login-captcha-provider");
+    target.innerHTML = "";
+    return;
+  }
+  const provider = challenge.provider || "";
+  target.classList.remove("hidden");
+  target.dataset.loginCaptchaProvider = provider;
+  target.innerHTML = loginCaptchaChallengeHtml(provider, challenge.publicParams || {});
+}
+
+function loginCaptchaChallengeHtml(provider, publicParams) {
+  const label = CAPTCHA_PROVIDER_LABELS[provider] || provider || "CAPTCHA";
+  return '<div class="login-captcha-card" data-login-captcha-provider="' + escapeAttribute(provider) + '">' +
+    '<div><strong>' + escapeText(label) + '</strong><p class="muted">' + escapeText(loginCaptchaProviderHint(provider)) + '</p></div>' +
+    '<div class="login-captcha-script-hook" data-login-captcha-script-hook="' + escapeAttribute(provider) + '"' +
+    loginCaptchaPublicParamAttributes(publicParams) + '></div>' +
+    '</div>';
+}
+
+function loginCaptchaProviderHint(provider) {
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(provider)) return "请完成页面中的验证码后再登录。";
+  return "请完成服务商验证后再登录。";
+}
+
+function loginCaptchaPublicParamAttributes(publicParams) {
+  return Object.entries(publicParams || {}).map(([key, value]) => (
+    ' data-public-param-' + escapeAttribute(key) + '="' + escapeAttribute(String(value ?? "")) + '"'
+  )).join("");
+}
+
+function loginCaptchaRequestFields() {
+  const challenge = state.loginCaptchaChallenge;
+  if (!challenge?.enabled) return {};
+  if (BASIC_LOGIN_CAPTCHA_PROVIDERS.includes(challenge.provider)) {
+    const token = readMockCaptchaToken();
+    return token ? { captchaToken: token } : {};
+  }
+  const payload = readMockCaptchaPayload(challenge.provider);
+  return payload ? { captchaPayload: payload } : {};
+}
+
+function readMockCaptchaToken() {
+  const mock = window.__NETFLIX_MAIL_CAPTCHA_RESPONSE__;
+  if (typeof mock === "string") return mock.trim();
+  if (mock && typeof mock === "object" && !Array.isArray(mock) && typeof mock.token === "string") {
+    return mock.token.trim();
+  }
+  return "";
+}
+
+function readMockCaptchaPayload(provider) {
+  const mock = window.__NETFLIX_MAIL_CAPTCHA_RESPONSE__;
+  if (!mock || typeof mock !== "object" || Array.isArray(mock)) return null;
+  const candidate = mock.payload && typeof mock.payload === "object" && !Array.isArray(mock.payload)
+    ? mock.payload
+    : mock;
+  const keys = ADVANCED_LOGIN_CAPTCHA_PAYLOAD_KEYS[provider] || [];
+  return keys.every((key) => typeof candidate[key] === "string" && candidate[key].trim()) ? candidate : null;
 }
 
 on("#login-form", "submit", async (event) => {
   event.preventDefault();
   loginMessage.textContent = "";
   loginMessage.className = "muted";
-  const body = Object.fromEntries(new FormData(event.currentTarget).entries());
+  const body = {
+    ...Object.fromEntries(new FormData(event.currentTarget).entries()),
+    ...loginCaptchaRequestFields()
+  };
   try {
     const data = await api("/api/admin/login", { method: "POST", body: JSON.stringify(body) });
     showApp(data.admin);

@@ -341,6 +341,17 @@ pre {
 .feature-card { padding: 16px; display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md); box-shadow: var(--shadow-sm); }
 .auth-card { padding: 42px; border-radius: 28px; background: rgba(255,255,255,0.86); border: 1px solid var(--line); box-shadow: var(--shadow-md); }
 .auth-card form { margin-top: 26px; }
+.login-captcha-challenge { margin-top: 18px; }
+.login-captcha-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.login-captcha-card.warning { border-color: #fed7aa; background: var(--warning-soft); color: #9a3412; }
+.login-captcha-script-hook { min-height: 44px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
 .form-actions { display: grid; gap: 12px; margin-top: 20px; }
 .setup-shell { min-height: 100vh; padding: 28px; }
 .setup-topbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 44px; }
